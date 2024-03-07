@@ -1,0 +1,8 @@
+.idea
+*.code-workspace
+*.ipynb_checkpoints
+**__pycache__
+
+*.tiff
+*.tif
+

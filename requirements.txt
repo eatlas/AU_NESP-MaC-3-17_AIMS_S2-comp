@@ -1,2 +1,3 @@
 earthengine-api=0.1.391=pyhd8ed1ab_0   # channel: conda-forge
 pandas=2.2.1=py39h6a678d5_0
+gdal=3.6.2=pypi_0   # channel: conda-forge

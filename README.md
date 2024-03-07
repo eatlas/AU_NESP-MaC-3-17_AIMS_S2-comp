@@ -64,8 +64,8 @@ This repository contains four python scripts (located in the `./src` directory):
 
 ### `create-composite.py`
 
-This script will create a composite image for each Sentinel 2 tile ID provided and export it to the . The tile IDs are read from a
-CSV file with the name and path of the file passed as argument:
+This script will create a composite image for each Sentinel 2 tile ID provided and export it to the . The tile IDs are 
+read from a CSV file with the name and path of the file passed as argument:
 
 ```shell
 python create-composite.py --data_file "path/to/tile-ids.csv"
@@ -89,3 +89,13 @@ The script has variables at the top of the file to manage settings:
 | SCALE                             | The image scale in meters. Sentinel 2 images have a maximum resolution of 10 meters.                                                                                    |
 | MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
 
+### `create-preview-images.py`
+
+This script will create JPEG preview images for GeoTIFFs in a directory. The source directory containing the GeoTIFFs
+and the destination directory for the preview images are passed as arguments:
+
+```shell
+python create-preview-images.py --src_path "path/to/GeoTIFFs" --dest_path "path/to/previews"
+```
+
+> Note: The script requires GDAL to be installed.

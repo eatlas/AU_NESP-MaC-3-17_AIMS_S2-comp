@@ -19,6 +19,7 @@ datasets. These additions will be noted in this change log.
     percentile from the filtered image collection and visualising with true-colour settings.  
     *Metadata:* https://eatlas.org.au/data/uuid/c38d2227-25c0-4d1e-adbc-bddb4aac1929  
     *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_p15-trueColour
+    *Git tag:* "composites_v1"
 
 ## Prerequisites
 
@@ -56,3 +57,35 @@ environment is activated.
 ```shell
 earthengine authenticate
 ```
+
+## Run the scripts
+
+This repository contains four python scripts (located in the `./src` directory):
+
+### `create-composite.py`
+
+This script will create a composite image for each Sentinel 2 tile ID provided and export it to the . The tile IDs are read from a
+CSV file with the name and path of the file passed as argument:
+
+```shell
+python create-composite.py --data_file "path/to/tile-ids.csv"
+```
+
+Currently, the following three CSV files are available:
+
+- `./data/tile-ids - all tiles.csv` - All tile IDs for the whole study region
+- `./data/tile-ids - GOC.csv` - Tile IDs for the Gulf of Carpentaria region
+- `./data/tile-ids - single.csv` - File used to process a single tile ID
+
+The script has variables at the top of the file to manage settings:
+
+| Variable                          | Description                                                                                                                                                             |
+|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| THREADS                           | Number of threads to run the composite creation in parallel.                                                                                                            |
+| MAX_CLOUD_COVER                   | ImageCollection filter: the maximum percentage of cloud cover per image.                                                                                                |
+| START_DATE                        | ImageCollection filter: The beginning of the period for images to be included.                                                                                          |
+| END_DATE                          | ImageCollection filter: The ending of the period for images to be included.                                                                                             |
+| VIS_OPTION_NAME                   | Visualisation option for contrast enhancements. At the moment only 'TrueColour' is supported.                                                                           |
+| SCALE                             | The image scale in meters. Sentinel 2 images have a maximum resolution of 10 meters.                                                                                    |
+| MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
+

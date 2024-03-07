@@ -18,7 +18,7 @@ datasets. These additions will be noted in this change log.
   A first draft version of clear-water composite images for the northern Australian seascape using the 15th
   percentile from the filtered image collection and visualising with true-colour settings.  
   *Metadata:* https://eatlas.org.au/data/uuid/c38d2227-25c0-4d1e-adbc-bddb4aac1929  
-  *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_p15-trueColour
+  *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_p15-trueColour  
   *Git tag:* "composites_v1"
 
 ## Prerequisites

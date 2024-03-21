@@ -141,15 +141,16 @@ class Sentinel2Processor:
         )
 
         # apply corrections
+        composite_collection = composite_collection.map(self.normalise_image)
         composite_collection = composite_collection.map(self.remove_sun_glint)
 
         return composite_collection
 
-    def export_to_cloud(self, image, name, tile_id, selected_vis_option, scale=10):
+    def export_to_cloud(self, normalised_image, name, tile_id, selected_vis_option, scale=10):
         """
         Export the composite image to cloud storage.
 
-        :param {ee.Image} image: The image to export
+        :param {ee.Image} normalised_image: The image to export with normalised values between 0 and 1
         :param {String} name: The file name for the image
         :param tile_id: The Sentinel 2 tile ID (needed to determine the original geometry for setting the region)
         :param {String} selected_vis_option: The name of the visualisation configuration. The name needs to correspond
@@ -160,10 +161,10 @@ class Sentinel2Processor:
 
         # Set a nodata value and replace masked pixels around the image edge with it.
         no_data_value = 0
-        image = image.unmask(no_data_value)
+        normalised_image = normalised_image.unmask(no_data_value)
 
         # Apply contract enhancements and transformations
-        export_image = self.visualise_image(image, selected_vis_option).multiply(254).add(1).toUint8()
+        export_image = self.visualise_image(normalised_image, selected_vis_option).multiply(254).add(1).toUint8()
 
         # Extract the tile geometry
         region = self.get_tile_geometry(tile_id, ee.Geometry.BBox(-180, -33, 180, 33))
@@ -192,7 +193,27 @@ class Sentinel2Processor:
         print('Task finished: ' + task.status()['state'])
 
     @staticmethod
-    def remove_sun_glint(image):
+    def normalise_image(image):
+        """
+        Normalised the bands "B2", "B3", "B4", "B8", and "B9" to values between 0 and 1.
+
+        :param {ee.Image} image: The image to be normalised
+        :return: {ee.Image}
+        """
+        scale_factor = ee.Number(0.0001) # Sentinel2 channels are 0 - 10000.
+
+        # band_b2 = image.select("B2").mulitply(scale_factor)
+        band_b2 = image.select("B2").multiply(scale_factor)
+        band_b3 = image.select("B3").multiply(scale_factor)
+        band_b4 = image.select("B4").multiply(scale_factor)
+        band_b8 = image.select("B8").multiply(scale_factor)
+        band_b9 = image.select("B9").multiply(scale_factor)
+
+        return image.addBands([band_b2, band_b3, band_b4, band_b8, band_b9], ["B2", "B3", "B4", "B8", "B9"], True)
+
+
+    @staticmethod
+    def remove_sun_glint(normalised_image):
         """
         This algorithm with its specific values was developed by Eric Lawrey as part of the NESP MaC 3.17 project.
         The values were determined by fine-tuning the scale between the B8 channel and each individual visible channel
@@ -210,7 +231,7 @@ class Sentinel2Processor:
         b3 = Math.pow(6 * (s3 - (sg*0.9)-0.030),g)
         b4 = Math.pow(6 * (s4 - (sg*0.95)-0.01),g)
 
-        :param {ee.Image} image: The image for which the sun glint should be removed.
+        :param {ee.Image} normalised_image: The image for which the sun glint should be removed with normalised values between 0 and 1
         :return: {ee.Image}
         """
 
@@ -218,15 +239,15 @@ class Sentinel2Processor:
         gamma = 0.5
 
         # select relevant bands and transform values to be withing 0 to 1
-        band_b2 = image.select("B2").multiply(0.0001)
-        band_b3 = image.select("B3").multiply(0.0001)
-        band_b4 = image.select("B4").multiply(0.0001)
-        band_b8 = image.select("B8").multiply(0.0001)
+        band_b2 = normalised_image.select("B2")
+        band_b3 = normalised_image.select("B3")
+        band_b4 = normalised_image.select("B4")
+        band_b8 = normalised_image.select("B8")
 
         # If the B8 value is lower than the threshold, use the threshold. This is to overcome the problem in shallow
         # areas where B08 infrared channel penetrates the water enough to pick up benthic reflection, making these
         # regions brighter than just the sun glint.
-        sun_glint = image.expression(
+        sun_glint = normalised_image.expression(
             "band_b8 < sun_glint_threshold ? band_b8 : sun_glint_threshold", {
                 'band_b8': band_b8,
                 'sun_glint_threshold': sun_glint_threshold
@@ -238,34 +259,34 @@ class Sentinel2Processor:
         band_b4 = (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01)).multiply(6).pow(gamma)
 
         # Replace the visible bands in the image with the corrected bands
-        return image.addBands([band_b2, band_b3, band_b4], ["B2", "B3", "B4"], True)
+        return normalised_image.addBands([band_b2, band_b3, band_b4], ["B2", "B3", "B4"], True)
 
-    def mask_clouds(self, image):
+    def mask_clouds(self, normalised_image):
         """
         Apply the cloud mask to each of the image bands. This should be
         done prior to reducing all the images using median or percentile.
 
-        :param {ee.Image} image: The image where clouds should be masked.
+        :param {ee.Image} normalised_image: The image where clouds should be masked with normalised values between 0 and 1
         :return: {ee.Image}
         """
-        image = self._add_s2_cloud_mask(image)
-        image = self._add_s2_cloud_shadow_mask(image)
+        normalised_image = self._add_s2_cloud_mask(normalised_image)
+        normalised_image = self._add_s2_cloud_shadow_mask(normalised_image)
 
         # Subset the cloudmask band and invert it so clouds/shadow are 0, else 1.
-        not_cld_shdw = image.select("cloudmask").Not()
+        not_cld_shdw = normalised_image.select("cloudmask").Not()
 
-        masked_img = image.select("B.*").updateMask(not_cld_shdw)
+        masked_img = normalised_image.select("B.*").updateMask(not_cld_shdw)
         # Get remaining QA bands
-        qa_img = image.select("QA.*")
+        qa_img = normalised_image.select("QA.*")
 
         # Subset reflectance bands and update their masks, return the result.
-        return masked_img.addBands(qa_img).addBands(image.select("cloudmask"))
+        return masked_img.addBands(qa_img).addBands(normalised_image.select("cloudmask"))
 
-    def visualise_image(self, image, selected_vis_option):
+    def visualise_image(self, normalised_image, selected_vis_option):
         """
         Apply band modifications according to the visualisation parameters and return the updated image.
 
-        :param {ee.Image} image: The image to which the modifications should be applied to.
+        :param {ee.Image} normalised_image: The image to visualise with normalised values between 0 and 1.
         :param {String} selected_vis_option: The selected visualisation parameter. The name needs to correspond to the
                                                 values in `self.VIS_OPTIONS`.
         :return: {ee.Image.rgb}
@@ -274,19 +295,19 @@ class Sentinel2Processor:
 
         if len(vis_params["bands"]) == 3:
             red_band = self.enhance_contrast(
-                image.select(vis_params["bands"][0]),
+                normalised_image.select(vis_params["bands"][0]),
                 vis_params["min"][0],
                 vis_params["max"][0],
                 vis_params["gamma"][0],
             )
             green_band = self.enhance_contrast(
-                image.select(vis_params["bands"][1]),
+                normalised_image.select(vis_params["bands"][1]),
                 vis_params["min"][1],
                 vis_params["max"][1],
                 vis_params["gamma"][1],
             )
             blue_band = self.enhance_contrast(
-                image.select(vis_params["bands"][2]),
+                normalised_image.select(vis_params["bands"][2]),
                 vis_params["min"][2],
                 vis_params["max"][2],
                 vis_params["gamma"][2],
@@ -295,7 +316,7 @@ class Sentinel2Processor:
             result_image = ee.Image.rgb(red_band, green_band, blue_band)
         else:
             result_image = self.enhance_contrast(
-                image.select(vis_params["bands"][0]),
+                normalised_image.select(vis_params["bands"][0]),
                 vis_params["min"][0],
                 vis_params["max"][0],
                 vis_params["gamma"][0],
@@ -304,40 +325,40 @@ class Sentinel2Processor:
         return result_image
 
     @staticmethod
-    def enhance_contrast(image, min, max, gamma):
+    def enhance_contrast(normalised_image, min, max, gamma):
         """
         Applies a contrast enhancement to the image, limiting the image between the min and max and applying a gamma
         correction.
 
-        :param {ee.Image} image: The image to modify.
+        :param {ee.Image} normalised_image: The image to modify with normalised values between 0 and 1.
         :param {float} min: The minimum value for the value range.
         :param {float} max: The maximum value for the value range.
         :param {float} gamma: The gamma correction value.
         :return: {ee.Image} The modified image.
         """
-        return image.subtract(min).divide(max - min).clamp(0, 1).pow(1 / gamma)
+        return normalised_image.subtract(min).divide(max - min).clamp(0, 1).pow(1 / gamma)
 
     @staticmethod
-    def _add_s2_cloud_mask(image):
+    def _add_s2_cloud_mask(normalised_image):
         """
         This function creates a Sentinel 2 image with matching cloud mask from the COPERNICUS/S2_CLOUD_PROBABILITY
         dataset.
 
         Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
-        :param {ee.Image} image: The image to modify.
+        :param {ee.Image} normalised_image: The image to modify with normalised values between 0 and 1.
         :return: {ee.Image}
         """
         # Preserve a copy of the system:index that is not modified
         # by the merging of image collections.
-        image = image.set("original_id", image.get("system:index"))
+        normalised_image = normalised_image.set("original_id", normalised_image.get("system:index"))
 
         # The masks for the 10m bands sometimes do not exclude bad data at
         # scene edges, so we apply masks from the 20m and 60m bands as well.
         # Example asset that needs this operation:
         # COPERNICUS/S2_CLOUD_PROBABILITY/20190301T000239_20190301T000238_T55GDP
-        image = image.updateMask(
-            image.select("B8A").mask().updateMask(image.select("B9").mask())
+        normalised_image = normalised_image.updateMask(
+            normalised_image.select("B8A").mask().updateMask(normalised_image.select("B9").mask())
         )
 
         # Get the dataset containing high quality cloud masks. Use
@@ -346,16 +367,16 @@ class Sentinel2Processor:
         # affect the final composite.
         s2_cloud_image = (
             ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
-            .filter(ee.Filter.equals("system:index", image.get("original_id")))
+            .filter(ee.Filter.equals("system:index", normalised_image.get("original_id")))
             .first()
         )
         s2_cloud_image = s2_cloud_image.set(
             "original_id", s2_cloud_image.get("system:index")
         )
 
-        return image.set("s2cloudless", s2_cloud_image)
+        return normalised_image.set("s2cloudless", s2_cloud_image)
 
-    def _add_s2_cloud_shadow_mask(self, image):
+    def _add_s2_cloud_shadow_mask(self, normalised_image):
         """
         This function estimates a mask for the clouds and the shadows and adds
         this as additional bands (highcloudmask, lowcloudmask and cloudmask).
@@ -381,7 +402,7 @@ class Sentinel2Processor:
 
         Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
-        :param {ee.Image} image: Sentinel 2 image to add the cloud masks to.
+        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0 and 1.
         :return: {ee.Image}
         """
 
@@ -393,7 +414,7 @@ class Sentinel2Processor:
         # long shadows. It is unclear how robust this approach is though.
         # Cloud probability threshold (%); values greater are considered cloud
         low_cloud_mask = self._get_s2_cloud_shadow_mask(
-            image,
+            normalised_image,
             35,
             # (cloud predication prob) Use low probability to pick up smaller
             # clouds. This threshold still misses a lot of small clouds.
@@ -414,7 +435,7 @@ class Sentinel2Processor:
 
         # Try to detect high thick clouds. Assume that this throw a longer shadow.
         high_cloud_mask = self._get_s2_cloud_shadow_mask(
-            image,
+            normalised_image,
             80,
             # Use high cloud probability to pick up mainly larger solid clouds
             300,
@@ -428,14 +449,14 @@ class Sentinel2Processor:
         cloud_mask = high_cloud_mask.add(low_cloud_mask).gt(0).rename("cloudmask")
 
         return (
-            image.addBands(cloud_mask)
+            normalised_image.addBands(cloud_mask)
             .addBands(high_cloud_mask)
             .addBands(low_cloud_mask)
         )
 
     @staticmethod
     def _get_s2_cloud_shadow_mask(
-            image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
+            normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
     ):
         """
         Estimate the cloud and shadow mask for a given image. This uses the following
@@ -464,10 +485,11 @@ class Sentinel2Processor:
         This assumes that the img has the cloud probability setup from
         COPERNICUS/S2_CLOUD_PROBABILITY (see `_add_s2_cloud_mask`).
 
-        :param {ee.Image} image: Sentinel 2 image to add the cloud mask to. Assumes that
+        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud mask to. Assumes that
                                    the COPERNICUS/S2_CLOUD_PROBABILITY dataset has been merged with
                                    image (see `_add_s2_cloud_mask`). In this case the probability
                                    band in the image stored under the s2cloudless property is used.
+                                   The values should normalised to be between 0 and 1.
         :param {int} cloud_prob_thresh: (0-100) probability threshold to
                                    apply to the COPERNICUS/S2_CLOUD_PROBABILITY layer to create the
                                    cloud mask. This basic mask is then has the erosion apply to it,
@@ -487,7 +509,6 @@ class Sentinel2Processor:
         :return: {ee.Image}
         """
 
-        sr_band_scale = 1e4  # Sentinel2 channels are 0 - 10000.
         nir_drk_thresh = 0.15  # Near-infrared reflectance; values less than are
         # considered potential cloud shadow. This threshold was
         # chosen to detect cloud shadows on land areas where
@@ -498,17 +519,17 @@ class Sentinel2Processor:
         # the masking of shadows on land areas. In the water it is determined by
         # the cloud_proj_dist.
         dark_pixels = (
-            image.select("B8").lt(nir_drk_thresh * sr_band_scale).rename("dark_pixels")
+            normalised_image.select("B8").lt(nir_drk_thresh).rename("dark_pixels")
         )
 
         # Determine the direction to project cloud shadow from clouds (assumes UTM projection).
         shadow_azimuth = ee.Number(90).subtract(
-            ee.Number(image.get("MEAN_SOLAR_AZIMUTH_ANGLE"))
+            ee.Number(normalised_image.get("MEAN_SOLAR_AZIMUTH_ANGLE"))
         )
 
         # Condition s2cloudless by the probability threshold value.
         is_cloud = (
-            ee.Image(image.get("s2cloudless"))
+            ee.Image(normalised_image.get("s2cloudless"))
             .select("probability")
             .gt(cloud_prob_thresh)
             .rename("allclouds")
@@ -534,7 +555,7 @@ class Sentinel2Processor:
             is_cloud_erosion_dilation = (
                 is_cloud.focal_min(erosion / erosion_scale)
                 .focal_max(erosion / erosion_scale)
-                .reproject(image.select([0]).projection(), None, erosion_scale)
+                .reproject(normalised_image.select([0]).projection(), None, erosion_scale)
                 .rename("cloudmask")
             )
         else:
@@ -547,7 +568,7 @@ class Sentinel2Processor:
             is_cloud_erosion_dilation.directionalDistanceTransform(
                 shadow_azimuth, cloud_proj_dist * 10
             )
-            .reproject(image.select([0]).projection(), None, 100)
+            .reproject(normalised_image.select([0]).projection(), None, 100)
             .select("distance")
             .mask()
             .rename("cloud_transform")
@@ -574,7 +595,7 @@ class Sentinel2Processor:
         # beaches significantly.
         return (
             is_cloud_or_shadow.focal_max(buffer / buffer_scale)
-            .reproject(image.select([0]).projection(), None, buffer_scale)
+            .reproject(normalised_image.select([0]).projection(), None, buffer_scale)
             .rename("cloudmask")
         )
 

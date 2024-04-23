@@ -7,3 +7,5 @@
 *.tif
 
 /data/
+/src/helper
+/src/data/EOT20/*

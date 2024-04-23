@@ -42,15 +42,33 @@ class Sentinel2Processor:
                     "max": [1, 1, 1],
                 },
             },
-            "Infrared": {
-                "description": "Only the infrared band",
+            "RedEdgeB5": {
+                "description": "Only the red edge band B5",
                 "visParams": {
-                    "bands": ['B8'],
+                    "bands": ["B5"],
                     "gamma": [1],
                     "min": [0.0],
-                    "max": [0.3],
+                    "max": [0.45],
                 },
-            }
+            },
+            "NearInfraredB8": {
+                "description": "Only the near infrared band B8",
+                "visParams": {
+                    "bands": ["B8"],
+                    "gamma": [1],
+                    "min": [0.0],
+                    "max": [0.45],
+                },
+            },
+            "NearInfraredFalseColour": {
+                "description": "False colour image from infrared bands using B12, B8, B5",
+                "visParams": {
+                    "bands": ["B12", "B8", "B5"],
+                    "gamma": [0.8, 0.8, 0.8],
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [1, 1, 1],
+                },
+            },
         }
 
         # Settings for exporting images to cloud storage
@@ -395,22 +413,27 @@ class Sentinel2Processor:
     @staticmethod
     def normalise_image(image):
         """
-        Normalised the bands "B2", "B3", "B4", "B8", and "B9" to values between 0 and 1.
+        Normalised the bands "B2", "B3", "B4", "B5", "B8", "B9", "B11", and "B12" to values between 0 and 1.
 
         :param {ee.Image} image: The image to be normalised
         :return: {ee.Image}
         """
-        scale_factor = ee.Number(0.0001) # Sentinel2 channels are 0 - 10000.
+        scale_factor = ee.Number(0.0001)  # Sentinel2 channels are 0 - 10000.
 
-        # band_b2 = image.select("B2").mulitply(scale_factor)
         band_b2 = image.select("B2").multiply(scale_factor)
         band_b3 = image.select("B3").multiply(scale_factor)
         band_b4 = image.select("B4").multiply(scale_factor)
+        band_b5 = image.select("B5").multiply(scale_factor)
         band_b8 = image.select("B8").multiply(scale_factor)
         band_b9 = image.select("B9").multiply(scale_factor)
+        band_b11 = image.select("B11").multiply(scale_factor)
+        band_b12 = image.select("B12").multiply(scale_factor)
 
-        return image.addBands([band_b2, band_b3, band_b4, band_b8, band_b9], ["B2", "B3", "B4", "B8", "B9"], True)
-
+        return image.addBands(
+            [band_b2, band_b3, band_b4, band_b5, band_b8, band_b9, band_b11, band_b12],
+            ["B2", "B3", "B4", "B5", "B8", "B9", "B11", "B12"],
+            True,
+        )
 
     @staticmethod
     def remove_sun_glint(normalised_image):
@@ -509,24 +532,52 @@ class Sentinel2Processor:
         vis_params = self.VIS_OPTIONS[selected_vis_option]["visParams"]
 
         if len(vis_params["bands"]) == 3:
-            red_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][0]),
-                vis_params["min"][0],
-                vis_params["max"][0],
-                vis_params["gamma"][0],
-            )
-            green_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][1]),
-                vis_params["min"][1],
-                vis_params["max"][1],
-                vis_params["gamma"][1],
-            )
-            blue_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][2]),
-                vis_params["min"][2],
-                vis_params["max"][2],
-                vis_params["gamma"][2],
-            )
+
+            if selected_vis_option == "NearInfraredFalseColour":
+                red_band = (
+                    normalised_image.select(vis_params["bands"][0])
+                    .subtract(vis_params["min"][0])
+                    .divide(vis_params["max"][0] - vis_params["min"][0])
+                    .clamp(0, 1)
+                    .multiply(6)
+                    .pow(vis_params["gamma"][0])
+                )
+                green_band = (
+                    normalised_image.select(vis_params["bands"][1])
+                    .subtract(vis_params["min"][1])
+                    .divide(vis_params["max"][1] - vis_params["min"][1])
+                    .clamp(0, 1)
+                    .multiply(4)
+                    .pow(vis_params["gamma"][1])
+                )
+                blue_band = (
+                    normalised_image.select(vis_params["bands"][2])
+                    .subtract(vis_params["min"][2])
+                    .divide(vis_params["max"][2] - vis_params["min"][2])
+                    .clamp(0, 1)
+                    .multiply(4)
+                    .pow(vis_params["gamma"][2])
+                )
+
+            else:
+                red_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][0]),
+                    vis_params["min"][0],
+                    vis_params["max"][0],
+                    vis_params["gamma"][0],
+                )
+                green_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][1]),
+                    vis_params["min"][1],
+                    vis_params["max"][1],
+                    vis_params["gamma"][1],
+                )
+                blue_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][2]),
+                    vis_params["min"][2],
+                    vis_params["max"][2],
+                    vis_params["gamma"][2],
+                )
 
             result_image = ee.Image.rgb(red_band, green_band, blue_band)
         else:

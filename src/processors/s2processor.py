@@ -112,47 +112,24 @@ class Sentinel2Processor:
         self,
         tile_id,
         max_cloud_cover,
-        min_images_in_collection,
         max_images_in_collection,
         start_date,
         end_date,
         correct_sunglint=True,
-        tide_type_focus=TidePredictor.TIDE_TYPE.OUTGOING_TIDE,
     ):
         """
         Create a low-tide composite for the given dates for a certain tile.
 
         :param {String} tile_id: The Sentinel 2 tile ID
         :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} min_images_in_collection: Minimum number of images used to create the composite
         :param {String} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :param {Boolean} correct_sunglint: Should sun glint correction be applied?
-        :param {String} tide_type_focus: Deternine on which tide type the focus should be
         :return: {ee.Image}
         """
 
         tide_predictor = TidePredictor(tile_id)
-        tide_type_order = []
-        if tide_type_focus == TidePredictor.TIDE_TYPE.OUTGOING_TIDE:
-            tide_type_order = [
-                TidePredictor.TIDE_TYPE.OUTGOING_TIDE,
-                TidePredictor.TIDE_TYPE.PEAK_LOW_TIDE,
-                TidePredictor.TIDE_TYPE.INCOMING_TIDE,
-            ]
-        elif tide_type_focus == TidePredictor.TIDE_TYPE.PEAK_LOW_TIDE:
-            tide_type_order = [
-                TidePredictor.TIDE_TYPE.PEAK_LOW_TIDE,
-                TidePredictor.TIDE_TYPE.OUTGOING_TIDE,
-                TidePredictor.TIDE_TYPE.INCOMING_TIDE,
-            ]
-        elif tide_type_focus == TidePredictor.TIDE_TYPE.INCOMING_TIDE:
-            tide_type_order = [
-                TidePredictor.TIDE_TYPE.INCOMING_TIDE,
-                TidePredictor.TIDE_TYPE.PEAK_LOW_TIDE,
-                TidePredictor.TIDE_TYPE.OUTGOING_TIDE,
-            ]
 
         composite_collection = self.get_composite_collection(
             tile_id, max_cloud_cover, start_date, end_date
@@ -162,13 +139,13 @@ class Sentinel2Processor:
         if correct_sunglint:
             composite_collection = composite_collection.map(self.remove_sun_glint)
 
+        # add a dictionary with relevant properties for easier access later
         def add_dictionary(image):
             properties = ["system:time_start", "system:index"]
             # Get the dictionary of properties with only wanted keys
             properties = ee.Dictionary(image.toDictionary(properties))
             # Set the dictionary as a property of the image
             return image.set("tide_properties", properties)
-
         composite_collection = composite_collection.map(add_dictionary)
 
         # split collectin by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the "SENSING_ORBIT_NUMBER".
@@ -193,13 +170,11 @@ class Sentinel2Processor:
             # Iterate over all images and add tide elevation and tide type (incoming, outgoing, peak high, peak low tide)
             for tide_properties in tide_properties_list:
                 image_date_time = datetime.fromtimestamp(
-                    tide_properties["system:time_start"] / 1000.0
+                    tide_properties["system:time_start"] / 1000.0,
+                    tz=timezone.utc
                 )
-                tide_elevation, tide_type = tide_predictor.get_tide_elevation(
-                    image_date_time
-                )
+                tide_elevation = tide_predictor.get_tide_elevation(image_date_time)
                 tide_properties["tide_elevation"] = tide_elevation
-                tide_properties["tide_type"] = tide_type
 
             # Filter for images which are below mean sea level (msl) (negative tide elevation value)
             below_msl_tide_properties_list = [
@@ -213,43 +188,12 @@ class Sentinel2Processor:
                 below_msl_tide_properties_list, key=lambda x: x["tide_elevation"]
             )
 
-            tide_image_list = []
-            for tide_type in tide_type_order:
-                if len(tide_image_list) < min_images_in_collection:
-                    tide_type_list = [
-                        entry
-                        for entry in below_msl_tide_properties_list
-                        if entry.get("tide_type") == tide_type
-                    ]
-                    tide_image_list.extend(tide_type_list)
-                    print(f"Added {len(tide_type_list)} {tide_type} images")
+            # Select max_images_in_collection of lowest tide images
+            tide_image_list = below_msl_tide_properties_list[0:max_images_in_collection]
 
-            # Have we now found enough images? If not, we will add incoming tide images
-            if len(tide_image_list) < min_images_in_collection:
-                incoming_tide_list = [
-                    entry
-                    for entry in below_msl_tide_properties_list
-                    if entry.get("tide_type") == tide_predictor.TIDE_TYPE.INCOMING_TIDE
-                ]
-                tide_image_list.extend(incoming_tide_list)
-                print(f"Added {len(incoming_tide_list)} incoming tide images")
-
-            # Fallback: if there not enough low tide images, sort by tide elevtion and use the lowest tide images
-            if len(tide_image_list) < min_images_in_collection:
-                # Sort the list of dictionaries by the 'tide' key in ascending order
-                sorted_list = sorted(
-                    tide_properties_list, key=lambda x: x["tide_elevation"]
-                )
-
-                # Get the number of lowest tide images from list according to the value in max_images_in_collection
-                tide_image_list = sorted_list[0:max_images_in_collection]
-            else:
-                # Get the number of lowest tide images from list according to the value in max_images_in_collection
-                tide_image_list = tide_image_list[0:max_images_in_collection]
-
-            orbit_system_index_values = [d["system:index"] for d in tide_image_list]
 
             # Extract the ID for filtering
+            orbit_system_index_values = [d["system:index"] for d in tide_image_list]
             system_index_values += orbit_system_index_values
 
         # Construct an Earth Engine list from the Python list
@@ -263,6 +207,14 @@ class Sentinel2Processor:
         return self._create_composite(filtered_collection)
 
     def _create_composite(self, composite_collection):
+        """
+        Creates a single composite image from a collection of images by using a 15th percentile reducer. Initially it
+        creates two composite images: one without cloud masking, and one with cloud masking. The composite without cloud
+        masking is put behind the composite with cloud masking to make sure there are no holes in the image.
+
+        :param composite_collection: The collection of images to build the composite image.
+        :return: {ee.Image}
+        """
 
         img_bands = [
             "B1",
@@ -285,7 +237,7 @@ class Sentinel2Processor:
 
         # Create a duplicate to keep without cloud masks
         composite_collection_no_cloud_mask = composite_collection.reduce(
-            ee.Reducer.percentile([50], ["p50"])
+            ee.Reducer.percentile([15], ["p15"])
         ).rename(img_bands)
 
         # Only process with cloud mask if there is more than one image

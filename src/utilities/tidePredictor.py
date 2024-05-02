@@ -6,7 +6,9 @@ import pyTMD.predict
 import pyTMD.tools
 import pyTMD.utilities
 
-DATA_PATH = "./../data/"
+# Set data directory
+current_dir = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(current_dir, "../data/")
 
 
 class TidePredictor:

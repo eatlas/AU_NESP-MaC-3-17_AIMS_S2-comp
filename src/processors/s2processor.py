@@ -5,10 +5,14 @@
 # This class provides all functionality for processing Sentinel 2 images.
 # Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
-from datetime import datetime
+from datetime import datetime, timezone
+import os
 import sys
 
-sys.path.append("../utilities")
+# Adjust sys path to include TidePredictor
+current_dir = os.path.dirname(os.path.abspath(__file__))
+utilities_path = os.path.join(current_dir, "../utilities")
+sys.path.append(utilities_path)
 
 import ee
 import time
@@ -203,7 +207,7 @@ class Sentinel2Processor:
         index_filter = ee.Filter.inList("system:index", index_list)
         filtered_collection = composite_collection.filter(index_filter)
 
-        # return filtered_collection
+        # create and return composite from filtered collection
         return self._create_composite(filtered_collection)
 
     def _create_composite(self, composite_collection):

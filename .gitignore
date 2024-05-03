@@ -7,5 +7,7 @@
 *.tif
 
 /data/
+.history
+
 /src/helper
 /src/data/EOT20/*

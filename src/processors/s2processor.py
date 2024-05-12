@@ -86,7 +86,7 @@ class Sentinel2Processor:
         max_images_in_collection,
         start_date,
         end_date,
-        correct_sunglint=True,
+        correct_sun_glint=True,
     ):
         """
         Create a composite for the given dates for a certain tile.
@@ -96,6 +96,7 @@ class Sentinel2Processor:
         :param {String} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
+        :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
         :return: {ee.Image}
         """
 
@@ -107,7 +108,7 @@ class Sentinel2Processor:
         )
 
         # apply corrections
-        if correct_sunglint:
+        if correct_sun_glint:
             composite_collection = composite_collection.map(self.remove_sun_glint)
 
         return self._create_composite(composite_collection)
@@ -119,7 +120,7 @@ class Sentinel2Processor:
         max_images_in_collection,
         start_date,
         end_date,
-        correct_sunglint=True,
+        correct_sun_glint=True,
     ):
         """
         Create a low-tide composite for the given dates for a certain tile.
@@ -129,7 +130,7 @@ class Sentinel2Processor:
         :param {String} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
-        :param {Boolean} correct_sunglint: Should sun glint correction be applied?
+        :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
         :return: {ee.Image}
         """
 
@@ -140,7 +141,7 @@ class Sentinel2Processor:
         )
 
         # apply corrections
-        if correct_sunglint:
+        if correct_sun_glint:
             composite_collection = composite_collection.map(self.remove_sun_glint)
 
         # add a dictionary with relevant properties for easier access later
@@ -152,10 +153,11 @@ class Sentinel2Processor:
             return image.set("tide_properties", properties)
         composite_collection = composite_collection.map(add_dictionary)
 
-        # split collectin by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the "SENSING_ORBIT_NUMBER".
-        # For example you can have a smaller triangle on the left side of a tile and a bigger section on the right side. If you filter
-        # for low tide images, you could end up with 9 small triangle images for the left side and only 1 bigger section for the right
-        # side. This would make using 10 images for a composite redundant.
+        # split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
+        # "SENSING_ORBIT_NUMBER". For example, you can have a smaller triangle on the left side of a tile and a bigger
+        # section on the right side. If you filter for low tide images, you could end up with 9 small triangle images
+        # for the left side and only 1 bigger section for the right side. This would make using 10 images for a
+        # composite redundant.
         orbit_numbers = composite_collection.aggregate_array(
             "SENSING_ORBIT_NUMBER"
         ).distinct()
@@ -171,7 +173,8 @@ class Sentinel2Processor:
                 "tide_properties"
             ).getInfo()
 
-            # Iterate over all images and add tide elevation and tide type (incoming, outgoing, peak high, peak low tide)
+            # Iterate over all images and add tide elevation and tide type (incoming, outgoing, peak high,
+            # peak low tide)
             for tide_properties in tide_properties_list:
                 image_date_time = datetime.fromtimestamp(
                     tide_properties["system:time_start"] / 1000.0,
@@ -194,7 +197,6 @@ class Sentinel2Processor:
 
             # Select max_images_in_collection of lowest tide images
             tide_image_list = below_msl_tide_properties_list[0:max_images_in_collection]
-
 
             # Extract the ID for filtering
             orbit_system_index_values = [d["system:index"] for d in tide_image_list]
@@ -632,7 +634,8 @@ class Sentinel2Processor:
 
         Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
-        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0 and 1.
+        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0
+                                            and 1.
         :return: {ee.Image}
         """
 

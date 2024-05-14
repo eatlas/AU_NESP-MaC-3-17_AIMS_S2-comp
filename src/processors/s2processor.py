@@ -438,17 +438,17 @@ class Sentinel2Processor:
 
         # Apply sun glint corrections to each visible band
         band_b2 = (
-            (band_b2.subtract(sun_glint.multiply(0.85)).subtract(0.058))
+            (band_b2.subtract(sun_glint.multiply(0.85)).subtract(0.058)).clamp(0, 1)
             .multiply(6)
             .pow(gamma)
         )
         band_b3 = (
-            (band_b3.subtract(sun_glint.multiply(0.9)).subtract(0.03))
+            (band_b3.subtract(sun_glint.multiply(0.9)).subtract(0.03)).clamp(0, 1)
             .multiply(6)
             .pow(gamma)
         )
         band_b4 = (
-            (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01))
+            (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01)).clamp(0, 1)
             .multiply(6)
             .pow(gamma)
         )

@@ -5,8 +5,18 @@
 # This class provides all functionality for processing Sentinel 2 images.
 # Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
+from datetime import datetime, timezone
+import os
+import sys
+
+# Adjust sys path to include TidePredictor
+current_dir = os.path.dirname(os.path.abspath(__file__))
+utilities_path = os.path.join(current_dir, "../utilities")
+sys.path.append(utilities_path)
+
 import ee
 import time
+from tidePredictor import TidePredictor
 
 
 class Sentinel2Processor:
@@ -36,49 +46,214 @@ class Sentinel2Processor:
                     "max": [1, 1, 1],
                 },
             },
-            "Infrared": {
-                "description": "Only the infrared band",
+            "RedEdgeB5": {
+                "description": "Only the red edge band B5",
                 "visParams": {
-                    "bands": ['B8'],
+                    "bands": ["B5"],
                     "gamma": [1],
                     "min": [0.0],
-                    "max": [0.3],
+                    "max": [0.45],
                 },
-            }
+            },
+            "NearInfraredB8": {
+                "description": "Only the near infrared band B8",
+                "visParams": {
+                    "bands": ["B8"],
+                    "gamma": [1],
+                    "min": [0.0],
+                    "max": [0.45],
+                },
+            },
+            "NearInfraredFalseColour": {
+                "description": "False colour image from infrared bands using B12, B8, B5",
+                "visParams": {
+                    "bands": ["B12", "B8", "B5"],
+                    "gamma": [0.8, 0.8, 0.8],
+                    "min": [0.0, 0.0, 0.0],
+                    "max": [1, 1, 1],
+                },
+            },
         }
 
         # Settings for exporting images to cloud storage
         self.bucket_name = bucket_name
         self.bucket_path = bucket_path
 
-    def get_composite(self, tile_id, max_cloud_cover, max_images_in_collection, start_date, end_date):
+    def get_composite(
+        self,
+        tile_id,
+        max_cloud_cover,
+        max_images_in_collection,
+        start_date,
+        end_date,
+        correct_sun_glint=True,
+    ):
         """
         Create a composite for the given dates for a certain tile.
 
         :param {String} tile_id: The Sentinel 2 tile ID
-        :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} max_images_in_collection: Maximum number of images used to create the composite
+        :param {Float} max_cloud_cover: Maximum percentage of cloud cover per image
+        :param {Integer} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
+        :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
         :return: {ee.Image}
         """
 
-        img_bands = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B8", "B8A", "B9", "B10", "B11", "B12",
-                     "QA10", "QA20", "QA60"]
+        composite_collection = self.get_composite_collection(
+            tile_id, max_cloud_cover, start_date, end_date
+        )
+        composite_collection = composite_collection.limit(
+            max_images_in_collection, "CLOUDY_PIXEL_PERCENTAGE", True
+        )
 
-        composite_collection = self.get_composite_collection(tile_id, max_cloud_cover,
-                                                             max_images_in_collection, start_date, end_date)
+        # apply corrections
+        if correct_sun_glint:
+            composite_collection = composite_collection.map(self.remove_sun_glint)
+
+        return self._create_composite(composite_collection)
+
+    def get_low_tide_composite(
+        self,
+        tile_id,
+        max_cloud_cover,
+        max_images_in_collection,
+        start_date,
+        end_date,
+        correct_sun_glint=True,
+        percentile=15
+    ):
+        """
+        Create a low-tide composite for the given dates for a certain tile.
+
+        :param {String} tile_id: The Sentinel 2 tile ID
+        :param {Float} max_cloud_cover: Maximum percentage of cloud cover per image
+        :param {Integer} max_images_in_collection: Maximum number of images used to create the composite
+        :param {String} start_date: Format yyyy-mm-dd
+        :param {String} end_date: Format yyyy-mm-dd
+        :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image
+        :return: {ee.Image}
+        """
+
+        tide_predictor = TidePredictor(tile_id)
+
+        composite_collection = self.get_composite_collection(
+            tile_id, max_cloud_cover, start_date, end_date
+        )
+
+        # apply corrections
+        if correct_sun_glint:
+            composite_collection = composite_collection.map(self.remove_sun_glint)
+
+        # add a dictionary with relevant properties for easier access later
+        def add_dictionary(image):
+            properties = ["system:time_start", "system:index"]
+            # Get the dictionary of properties with only wanted keys
+            properties = ee.Dictionary(image.toDictionary(properties))
+            # Set the dictionary as a property of the image
+            return image.set("tide_properties", properties)
+        composite_collection = composite_collection.map(add_dictionary)
+
+        # split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
+        # "SENSING_ORBIT_NUMBER". For example, you can have a smaller triangle on the left side of a tile and a bigger
+        # section on the right side. If you filter for low tide images, you could end up with 9 small triangle images
+        # for the left side and only 1 bigger section for the right side. This would make using 10 images for a
+        # composite redundant.
+        orbit_numbers = composite_collection.aggregate_array(
+            "SENSING_ORBIT_NUMBER"
+        ).distinct()
+
+        # Create ImageCollections for each orbit number and filter for low tide images
+        system_index_values = []
+        for orbit_number in orbit_numbers.getInfo():
+            orbit_collection = composite_collection.filter(
+                ee.Filter.eq("SENSING_ORBIT_NUMBER", orbit_number)
+            )
+
+            tide_properties_list = orbit_collection.aggregate_array(
+                "tide_properties"
+            ).getInfo()
+
+            # Iterate over all images and add tide elevation and tide type (incoming, outgoing, peak high,
+            # peak low tide)
+            for tide_properties in tide_properties_list:
+                image_date_time = datetime.fromtimestamp(
+                    tide_properties["system:time_start"] / 1000.0,
+                    tz=timezone.utc
+                )
+                tide_elevation = tide_predictor.get_tide_elevation(image_date_time)
+                tide_properties["tide_elevation"] = tide_elevation
+
+            # Filter for images which are below mean sea level (msl) (negative tide elevation value)
+            below_msl_tide_properties_list = [
+                entry
+                for entry in tide_properties_list
+                if entry.get("tide_elevation") < 0
+            ]
+
+            # Sort the below MSL list to get the lowest tide images in each category
+            below_msl_tide_properties_list = sorted(
+                below_msl_tide_properties_list, key=lambda x: x["tide_elevation"]
+            )
+
+            # Select max_images_in_collection of lowest tide images
+            tide_image_list = below_msl_tide_properties_list[0:max_images_in_collection]
+
+            # Extract the ID for filtering
+            orbit_system_index_values = [d["system:index"] for d in tide_image_list]
+            system_index_values += orbit_system_index_values
+
+        # Construct an Earth Engine list from the Python list
+        index_list = ee.List(system_index_values)
+
+        # Create a filter based on the 'system:index' property
+        index_filter = ee.Filter.inList("system:index", index_list)
+        filtered_collection = composite_collection.filter(index_filter)
+
+        # create and return composite from filtered collection
+        return self._create_composite(filtered_collection, percentile)
+
+    def _create_composite(self, composite_collection, percentile=15):
+        """
+        Creates a single composite image from a collection of images by using a 15th percentile reducer. Initially it
+        creates two composite images: one without cloud masking, and one with cloud masking. The composite without cloud
+        masking is put behind the composite with cloud masking to make sure there are no holes in the image.
+
+        :param composite_collection: The collection of images to build the composite image.
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image.
+        :return: {ee.Image}
+        """
+
+        img_bands = [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B8A",
+            "B9",
+            "B10",
+            "B11",
+            "B12",
+            "QA10",
+            "QA20",
+            "QA60",
+        ]
 
         # Create a duplicate to keep without cloud masks
         composite_collection_no_cloud_mask = composite_collection.reduce(
-            ee.Reducer.percentile([50], ["p50"])
+            ee.Reducer.percentile([percentile], ["p" + str(percentile)])
         ).rename(img_bands)
 
         # Only process with cloud mask if there is more than one image
         if composite_collection.size().getInfo() > 1:
             composite_collection_with_cloud_mask = (
                 composite_collection.map(self.mask_clouds)
-                .reduce(ee.Reducer.percentile([15], ["p15"]))
+                .reduce(ee.Reducer.percentile([percentile], ["p" + str(percentile)]))
                 .rename(img_bands + ["cloudmask"])
             )
 
@@ -118,13 +293,12 @@ class Sentinel2Processor:
 
         return composite
 
-    def get_composite_collection(self, tile_id, max_cloud_cover, max_images_in_collection, start_date, end_date):
+    def get_composite_collection(self, tile_id, max_cloud_cover, start_date, end_date):
         """
         Get the filtered image collection for a composite image.
 
         :param {String} tile_id: The Sentinel 2 tile ID
         :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :return: {ee.ImageCollection}
@@ -136,17 +310,18 @@ class Sentinel2Processor:
             .filter(ee.Filter.eq("MGRS_TILE", tile_id))
             .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_cover))
             .filterDate(ee.Date(start_date), ee.Date(end_date))
-            .filter(ee.Filter.gt("system:asset_size", 100000000))  # Remove small fragments of tiles
-            .limit(max_images_in_collection, "CLOUDY_PIXEL_PERCENTAGE", True)
+            .filter(
+                ee.Filter.gt("system:asset_size", 100000000)
+            )  # Remove small fragments of tiles
         )
 
-        # apply corrections
         composite_collection = composite_collection.map(self.normalise_image)
-        composite_collection = composite_collection.map(self.remove_sun_glint)
 
         return composite_collection
 
-    def export_to_cloud(self, normalised_image, name, tile_id, selected_vis_option, scale=10):
+    def export_to_cloud(
+        self, normalised_image, name, tile_id, selected_vis_option, scale=10
+    ):
         """
         Export the composite image to cloud storage.
 
@@ -164,53 +339,62 @@ class Sentinel2Processor:
         normalised_image = normalised_image.unmask(no_data_value)
 
         # Apply contract enhancements and transformations
-        export_image = self.visualise_image(normalised_image, selected_vis_option).multiply(254).add(1).toUint8()
+        export_image = (
+            self.visualise_image(normalised_image, selected_vis_option)
+            .multiply(254)
+            .add(1)
+            .toUint8()
+        )
 
         # Extract the tile geometry
         region = self.get_tile_geometry(tile_id, ee.Geometry.BBox(-180, -33, 180, 33))
 
         # Export the image, specifying scale and region.
-        task = ee.batch.Export.image.toCloudStorage(**{
-            'image': export_image,
-            'description': name,
-            'scale': scale,
-            'fileFormat': 'GeoTIFF',
-            'bucket': self.bucket_name,
-            'fileNamePrefix': self.bucket_path + name,
-            'region': region,
-            'formatOptions': {
-                'cloudOptimized': True,
-                'noData': no_data_value
-            },
-            'maxPixels': 6e8  # Raise the default limit of 1e8 to fit the export
-        })
+        task = ee.batch.Export.image.toCloudStorage(
+            **{
+                "image": export_image,
+                "description": name,
+                "scale": scale,
+                "fileFormat": "GeoTIFF",
+                "bucket": self.bucket_name,
+                "fileNamePrefix": self.bucket_path + name,
+                "region": region,
+                "formatOptions": {"cloudOptimized": True, "noData": no_data_value},
+                "maxPixels": 6e8,  # Raise the default limit of 1e8 to fit the export
+            }
+        )
 
         # Start processing the image and wait for task to be finished
         task.start()
         while task.active():
-            print('Polling for task (id: {}).'.format(task.id))
+            print("Polling for task (id: {}).".format(task.id))
             time.sleep(10)
-        print('Task finished: ' + task.status()['state'])
+        print("Task finished: " + task.status()["state"])
 
     @staticmethod
     def normalise_image(image):
         """
-        Normalised the bands "B2", "B3", "B4", "B8", and "B9" to values between 0 and 1.
+        Normalised the bands "B2", "B3", "B4", "B5", "B8", "B9", "B11", and "B12" to values between 0 and 1.
 
         :param {ee.Image} image: The image to be normalised
         :return: {ee.Image}
         """
-        scale_factor = ee.Number(0.0001) # Sentinel2 channels are 0 - 10000.
+        scale_factor = ee.Number(0.0001)  # Sentinel2 channels are 0 - 10000.
 
-        # band_b2 = image.select("B2").mulitply(scale_factor)
         band_b2 = image.select("B2").multiply(scale_factor)
         band_b3 = image.select("B3").multiply(scale_factor)
         band_b4 = image.select("B4").multiply(scale_factor)
+        band_b5 = image.select("B5").multiply(scale_factor)
         band_b8 = image.select("B8").multiply(scale_factor)
         band_b9 = image.select("B9").multiply(scale_factor)
+        band_b11 = image.select("B11").multiply(scale_factor)
+        band_b12 = image.select("B12").multiply(scale_factor)
 
-        return image.addBands([band_b2, band_b3, band_b4, band_b8, band_b9], ["B2", "B3", "B4", "B8", "B9"], True)
-
+        return image.addBands(
+            [band_b2, band_b3, band_b4, band_b5, band_b8, band_b9, band_b11, band_b12],
+            ["B2", "B3", "B4", "B5", "B8", "B9", "B11", "B12"],
+            True,
+        )
 
     @staticmethod
     def remove_sun_glint(normalised_image):
@@ -248,18 +432,31 @@ class Sentinel2Processor:
         # areas where B08 infrared channel penetrates the water enough to pick up benthic reflection, making these
         # regions brighter than just the sun glint.
         sun_glint = normalised_image.expression(
-            "band_b8 < sun_glint_threshold ? band_b8 : sun_glint_threshold", {
-                'band_b8': band_b8,
-                'sun_glint_threshold': sun_glint_threshold
-            })
+            "band_b8 < sun_glint_threshold ? band_b8 : sun_glint_threshold",
+            {"band_b8": band_b8, "sun_glint_threshold": sun_glint_threshold},
+        )
 
         # Apply sun glint corrections to each visible band
-        band_b2 = (band_b2.subtract(sun_glint.multiply(0.85)).subtract(0.058)).multiply(6).pow(gamma)
-        band_b3 = (band_b3.subtract(sun_glint.multiply(0.9)).subtract(0.03)).multiply(6).pow(gamma)
-        band_b4 = (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01)).multiply(6).pow(gamma)
+        band_b2 = (
+            (band_b2.subtract(sun_glint.multiply(0.85)).subtract(0.058)).clamp(0, 1)
+            .multiply(6)
+            .pow(gamma)
+        )
+        band_b3 = (
+            (band_b3.subtract(sun_glint.multiply(0.9)).subtract(0.03)).clamp(0, 1)
+            .multiply(6)
+            .pow(gamma)
+        )
+        band_b4 = (
+            (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01)).clamp(0, 1)
+            .multiply(6)
+            .pow(gamma)
+        )
 
         # Replace the visible bands in the image with the corrected bands
-        return normalised_image.addBands([band_b2, band_b3, band_b4], ["B2", "B3", "B4"], True)
+        return normalised_image.addBands(
+            [band_b2, band_b3, band_b4], ["B2", "B3", "B4"], True
+        )
 
     def mask_clouds(self, normalised_image):
         """
@@ -280,7 +477,9 @@ class Sentinel2Processor:
         qa_img = normalised_image.select("QA.*")
 
         # Subset reflectance bands and update their masks, return the result.
-        return masked_img.addBands(qa_img).addBands(normalised_image.select("cloudmask"))
+        return masked_img.addBands(qa_img).addBands(
+            normalised_image.select("cloudmask")
+        )
 
     def visualise_image(self, normalised_image, selected_vis_option):
         """
@@ -294,24 +493,52 @@ class Sentinel2Processor:
         vis_params = self.VIS_OPTIONS[selected_vis_option]["visParams"]
 
         if len(vis_params["bands"]) == 3:
-            red_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][0]),
-                vis_params["min"][0],
-                vis_params["max"][0],
-                vis_params["gamma"][0],
-            )
-            green_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][1]),
-                vis_params["min"][1],
-                vis_params["max"][1],
-                vis_params["gamma"][1],
-            )
-            blue_band = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][2]),
-                vis_params["min"][2],
-                vis_params["max"][2],
-                vis_params["gamma"][2],
-            )
+
+            if selected_vis_option == "NearInfraredFalseColour":
+                red_band = (
+                    normalised_image.select(vis_params["bands"][0])
+                    .subtract(vis_params["min"][0])
+                    .divide(vis_params["max"][0] - vis_params["min"][0])
+                    .clamp(0, 1)
+                    .multiply(6)
+                    .pow(vis_params["gamma"][0])
+                )
+                green_band = (
+                    normalised_image.select(vis_params["bands"][1])
+                    .subtract(vis_params["min"][1])
+                    .divide(vis_params["max"][1] - vis_params["min"][1])
+                    .clamp(0, 1)
+                    .multiply(4)
+                    .pow(vis_params["gamma"][1])
+                )
+                blue_band = (
+                    normalised_image.select(vis_params["bands"][2])
+                    .subtract(vis_params["min"][2])
+                    .divide(vis_params["max"][2] - vis_params["min"][2])
+                    .clamp(0, 1)
+                    .multiply(4)
+                    .pow(vis_params["gamma"][2])
+                )
+
+            else:
+                red_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][0]),
+                    vis_params["min"][0],
+                    vis_params["max"][0],
+                    vis_params["gamma"][0],
+                )
+                green_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][1]),
+                    vis_params["min"][1],
+                    vis_params["max"][1],
+                    vis_params["gamma"][1],
+                )
+                blue_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][2]),
+                    vis_params["min"][2],
+                    vis_params["max"][2],
+                    vis_params["gamma"][2],
+                )
 
             result_image = ee.Image.rgb(red_band, green_band, blue_band)
         else:
@@ -336,7 +563,9 @@ class Sentinel2Processor:
         :param {float} gamma: The gamma correction value.
         :return: {ee.Image} The modified image.
         """
-        return normalised_image.subtract(min).divide(max - min).clamp(0, 1).pow(1 / gamma)
+        return (
+            normalised_image.subtract(min).divide(max - min).clamp(0, 1).pow(1 / gamma)
+        )
 
     @staticmethod
     def _add_s2_cloud_mask(normalised_image):
@@ -351,14 +580,18 @@ class Sentinel2Processor:
         """
         # Preserve a copy of the system:index that is not modified
         # by the merging of image collections.
-        normalised_image = normalised_image.set("original_id", normalised_image.get("system:index"))
+        normalised_image = normalised_image.set(
+            "original_id", normalised_image.get("system:index")
+        )
 
         # The masks for the 10m bands sometimes do not exclude bad data at
         # scene edges, so we apply masks from the 20m and 60m bands as well.
         # Example asset that needs this operation:
         # COPERNICUS/S2_CLOUD_PROBABILITY/20190301T000239_20190301T000238_T55GDP
         normalised_image = normalised_image.updateMask(
-            normalised_image.select("B8A").mask().updateMask(normalised_image.select("B9").mask())
+            normalised_image.select("B8A")
+            .mask()
+            .updateMask(normalised_image.select("B9").mask())
         )
 
         # Get the dataset containing high quality cloud masks. Use
@@ -367,7 +600,9 @@ class Sentinel2Processor:
         # affect the final composite.
         s2_cloud_image = (
             ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
-            .filter(ee.Filter.equals("system:index", normalised_image.get("original_id")))
+            .filter(
+                ee.Filter.equals("system:index", normalised_image.get("original_id"))
+            )
             .first()
         )
         s2_cloud_image = s2_cloud_image.set(
@@ -402,7 +637,8 @@ class Sentinel2Processor:
 
         Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
-        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0 and 1.
+        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0
+                                            and 1.
         :return: {ee.Image}
         """
 
@@ -456,7 +692,7 @@ class Sentinel2Processor:
 
     @staticmethod
     def _get_s2_cloud_shadow_mask(
-            normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
+        normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
     ):
         """
         Estimate the cloud and shadow mask for a given image. This uses the following
@@ -555,7 +791,9 @@ class Sentinel2Processor:
             is_cloud_erosion_dilation = (
                 is_cloud.focal_min(erosion / erosion_scale)
                 .focal_max(erosion / erosion_scale)
-                .reproject(normalised_image.select([0]).projection(), None, erosion_scale)
+                .reproject(
+                    normalised_image.select([0]).projection(), None, erosion_scale
+                )
                 .rename("cloudmask")
             )
         else:
@@ -575,7 +813,7 @@ class Sentinel2Processor:
         )
 
         # Identify the intersection of dark pixels with cloud shadow projection.
-        shadows = cloud_proj.multiply(dark_pixels).rename('shadows')
+        shadows = cloud_proj.multiply(dark_pixels).rename("shadows")
 
         # Add the cloud mask to the shadows. On water the clouds are already
         # masked off because all the water pixels are considered shadows due to
@@ -613,13 +851,15 @@ class Sentinel2Processor:
 
         # Used to find the geometry of the selected images. For more info checkout
         # https://eatlas.org.au/data/uuid/f7468d15-12be-4e3f-a246-b2882a324f59
-        s2_tiles = ee.FeatureCollection("users/ericlawrey/World_ESA_Sentinel-2-tiling-grid")
+        s2_tiles = ee.FeatureCollection(
+            "users/ericlawrey/World_ESA_Sentinel-2-tiling-grid"
+        )
 
         # Find the feature that corresponds to the specified tileID.
         # Filter to the search region. This is to reduce the number of tiles that need
         # to be searched (maybe).
         search_tiles = s2_tiles.filterBounds(search_bbox)
-        tile_feature = search_tiles.filter(ee.Filter.eq('Name', tile_id)).first()
+        tile_feature = search_tiles.filter(ee.Filter.eq("Name", tile_id)).first()
 
         # Merge all the features together
         return tile_feature.geometry(0.1)

@@ -20,7 +20,8 @@ ee.Initialize()
 THREADS = 10
 
 MAX_CLOUD_COVER = 0.1
-MAX_NUMBER_OF_IMAGES_IN_COMPOSITE = 5
+MAX_NUMBER_OF_IMAGES_IN_COMPOSITE = 10
+PERCENTILE = 30
 START_DATE = '2018-01-01'
 END_DATE = '2023-12-31'
 VIS_OPTION_NAME = 'TrueColour'
@@ -45,8 +46,8 @@ def process_tile_id(tile_id, tile_index):
     :return: The tile index.
     """
     logging.info("%s starting to process %s", tile_index, tile_id)
-    composite = processor.get_low_tide_composite(tile_id, MAX_CLOUD_COVER, MAX_NUMBER_OF_IMAGES_IN_COMPOSITE, START_DATE,
-                                                 END_DATE)
+    composite = processor.get_low_tide_composite(tile_id, MAX_CLOUD_COVER, MAX_NUMBER_OF_IMAGES_IN_COMPOSITE,
+                                                 START_DATE, END_DATE, percentile=PERCENTILE)
     processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p15_low-tide_" + VIS_OPTION_NAME + "_" + tile_id, tile_id, 
                               VIS_OPTION_NAME, SCALE)
     logging.info("%s finished processing %s", tile_index, tile_id)

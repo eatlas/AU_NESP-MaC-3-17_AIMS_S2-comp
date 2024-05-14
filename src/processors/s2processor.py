@@ -92,8 +92,8 @@ class Sentinel2Processor:
         Create a composite for the given dates for a certain tile.
 
         :param {String} tile_id: The Sentinel 2 tile ID
-        :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} max_images_in_collection: Maximum number of images used to create the composite
+        :param {Float} max_cloud_cover: Maximum percentage of cloud cover per image
+        :param {Integer} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
@@ -121,16 +121,18 @@ class Sentinel2Processor:
         start_date,
         end_date,
         correct_sun_glint=True,
+        percentile=15
     ):
         """
         Create a low-tide composite for the given dates for a certain tile.
 
         :param {String} tile_id: The Sentinel 2 tile ID
-        :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} max_images_in_collection: Maximum number of images used to create the composite
+        :param {Float} max_cloud_cover: Maximum percentage of cloud cover per image
+        :param {Integer} max_images_in_collection: Maximum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image
         :return: {ee.Image}
         """
 
@@ -210,15 +212,16 @@ class Sentinel2Processor:
         filtered_collection = composite_collection.filter(index_filter)
 
         # create and return composite from filtered collection
-        return self._create_composite(filtered_collection)
+        return self._create_composite(filtered_collection, percentile)
 
-    def _create_composite(self, composite_collection):
+    def _create_composite(self, composite_collection, percentile=15):
         """
         Creates a single composite image from a collection of images by using a 15th percentile reducer. Initially it
         creates two composite images: one without cloud masking, and one with cloud masking. The composite without cloud
         masking is put behind the composite with cloud masking to make sure there are no holes in the image.
 
         :param composite_collection: The collection of images to build the composite image.
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image.
         :return: {ee.Image}
         """
 
@@ -243,14 +246,14 @@ class Sentinel2Processor:
 
         # Create a duplicate to keep without cloud masks
         composite_collection_no_cloud_mask = composite_collection.reduce(
-            ee.Reducer.percentile([15], ["p15"])
+            ee.Reducer.percentile([percentile], ["p" + str(percentile)])
         ).rename(img_bands)
 
         # Only process with cloud mask if there is more than one image
         if composite_collection.size().getInfo() > 1:
             composite_collection_with_cloud_mask = (
                 composite_collection.map(self.mask_clouds)
-                .reduce(ee.Reducer.percentile([15], ["p15"]))
+                .reduce(ee.Reducer.percentile([percentile], ["p" + str(percentile)]))
                 .rename(img_bands + ["cloudmask"])
             )
 

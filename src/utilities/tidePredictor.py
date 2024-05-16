@@ -35,14 +35,14 @@ class TidePredictor:
             compressed=self.model.compressed,
         )
         self.model_constituents = self.model.constituents
-        
+
         # read tile centroids
         self.tile_water_centroids = np.genfromtxt(
             DATA_PATH + "sentinel2-study-area-water-centroids.csv",
+            dtype=None,
             delimiter=",",
             names=True,
-            dtype=None,
-            encoding=None,
+            encoding=None
         )
 
         self.hc = None
@@ -58,10 +58,10 @@ class TidePredictor:
 
         # convert time from MJD to days relative to Jan 1, 1992 (48622 MJD)
         tide_time = pyTMD.time.convert_calendar_dates(
-            image_date_time.year, 
-            image_date_time.month, 
-            image_date_time.day, 
-            image_date_time.hour, 
+            image_date_time.year,
+            image_date_time.month,
+            image_date_time.day,
+            image_date_time.hour,
             image_date_time.minute
         )
 
@@ -81,10 +81,9 @@ class TidePredictor:
         """
         filtered_data = self.tile_water_centroids[
             self.tile_water_centroids["Name"] == tile_id
-        ]
+            ]
         return {"lat": filtered_data["Y"], "lon": filtered_data["X"]}
 
-    
     def _set_hc(self, tile_id):
         """
         Set the harmonic constituants for a specified Sentinel 2 tile.

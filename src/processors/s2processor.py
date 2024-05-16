@@ -87,6 +87,7 @@ class Sentinel2Processor:
         start_date,
         end_date,
         correct_sun_glint=True,
+        percentile=15
     ):
         """
         Create a composite for the given dates for a certain tile.
@@ -97,6 +98,7 @@ class Sentinel2Processor:
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image
         :return: {ee.Image}
         """
 
@@ -111,7 +113,7 @@ class Sentinel2Processor:
         if correct_sun_glint:
             composite_collection = composite_collection.map(self.remove_sun_glint)
 
-        return self._create_composite(composite_collection)
+        return self._create_composite(composite_collection, percentile)
 
     def get_low_tide_composite(
         self,

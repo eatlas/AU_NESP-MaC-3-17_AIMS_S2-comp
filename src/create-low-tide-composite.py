@@ -48,8 +48,8 @@ def process_tile_id(tile_id, tile_index):
     logging.info("%s starting to process %s", tile_index, tile_id)
     composite = processor.get_low_tide_composite(tile_id, MAX_CLOUD_COVER, MAX_NUMBER_OF_IMAGES_IN_COMPOSITE,
                                                  START_DATE, END_DATE, percentile=PERCENTILE)
-    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p15_low-tide_" + VIS_OPTION_NAME + "_" + tile_id, tile_id, 
-                              VIS_OPTION_NAME, SCALE)
+    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p" + str(PERCENTILE) + "_low-tide_" + VIS_OPTION_NAME +
+                              "_" + tile_id, tile_id, VIS_OPTION_NAME, SCALE)
     logging.info("%s finished processing %s", tile_index, tile_id)
     return tile_index
 

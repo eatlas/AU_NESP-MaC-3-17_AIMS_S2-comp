@@ -10,9 +10,19 @@ scripts are written in Python and use the Google Earth Engine library
 
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
+2024-05-16 - Add capability to create low-tide composites and near infrared false colour style (Git tag: 
+"low-tide_composites_v1")  
 2024-03-07 - Initial release draft composites using 15th percentile (Git tag: "composites_v1")
 
 ## Datasets
+
+- ***low-tide 30th percentile true colour and near infrared false colour - version 1 2024:***  
+  A variation to the previous composite images by focusing on low-tide input images for the northern Australian seascape 
+  using the 30th percentile from the filtered image collection and visualising with true-colour and 
+  near-infrared-false-colour settings.  
+  *Metadata:* https://eatlas.org.au/data/uuid/ec1db691-3729-4635-a01c-378263e539b6  
+  *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_low-tide_p30  
+  *Git tag:* "tide_composites_v1"
 
 - ***15th percentile true colour - draft version 1 2024:***  
   A first draft version of clear-water composite images for the northern Australian seascape using the 15th
@@ -58,17 +68,30 @@ environment is activated.
 earthengine authenticate
 ```
 
+### Download the tide model data
+To generate low-tide composites, the tide model data needs to be downloaded and added to the project. For the tide
+prediction we use the empirical ocean tide model EOT20 (Hart-Davis et al., 2021) which is freely accessible at 
+https://doi.org/10.17882/79489.
+
+1. Navigate to the website https://doi.org/10.17882/79489 and click the "Download" button towards the bottom of the page.
+2. Extract the downloaded zip file
+3. Copy the folder "ocean_tides" to `./src/data/EOT20`
+
+
 ## Run the scripts
 
 This repository contains four python scripts (located in the `./src` directory):
 
-### `create-composite.py`
+### `create-composite.py` and `create-low-tide-composite.py`
 
-This script will create a composite image for each Sentinel 2 tile ID provided and export it to the cloud storage. The 
-tile IDs are read from a CSV file with the name and path of the file passed as argument:
+The script `create-composite.py` will create a composite image for each Sentinel 2 tile ID provided. Similar, the 
+script `create-low-tide-composite.py` will create a low-tide composite for each Sentinel 2 tile ID provided. The scripts
+export the final composite to the cloud storage.The tile IDs are read from a CSV file with the name and path of the 
+file passed as argument:
 
 ```shell
 python create-composite.py --data_file "path/to/tile-ids.csv"
+python create-low-tide-composite.py --data_file "path/to/tile-ids.csv"
 ```
 
 Currently, the following three CSV files are available:
@@ -76,18 +99,23 @@ Currently, the following three CSV files are available:
 - `./data/tile-ids - all tiles.csv` - All tile IDs for the whole study region
 - `./data/tile-ids - GOC.csv` - Tile IDs for the Gulf of Carpentaria region
 - `./data/tile-ids - single.csv` - File used to process a single tile ID
+- `./data/tile-ids - Darwin to Broome coastal area.csv` - File used for the low-tide composites focusing on the coastal
+area between Darwin and Broome
 
-The script has variables at the top of the file to manage settings:
+The scripts have variables at the top of the file to manage settings:
 
 | Variable                          | Description                                                                                                                                                             |
 |-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | THREADS                           | Number of threads to run the composite creation in parallel.                                                                                                            |
 | MAX_CLOUD_COVER                   | ImageCollection filter: the maximum percentage of cloud cover per image.                                                                                                |
+| MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
+| PERCENTILE                        | The percentile to reduce the collection to the composite image.                                                                                                         |
 | START_DATE                        | ImageCollection filter: The beginning of the period for images to be included.                                                                                          |
 | END_DATE                          | ImageCollection filter: The ending of the period for images to be included.                                                                                             |
 | VIS_OPTION_NAME                   | Visualisation option for contrast enhancements. At the moment only 'TrueColour' is supported.                                                                           |
 | SCALE                             | The image scale in meters. Sentinel 2 images have a maximum resolution of 10 meters.                                                                                    |
-| MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
+| BUCKET_NAME                       | The bucket name in Google Cloud Storage.                                                                                                                                |
+| BUCKET_PATH                       | The path in the bucket in Google Cloud Storage.                                                                                                                         |
 
 ### `create-preview-images.py`
 

@@ -68,7 +68,7 @@ class TidePredictor:
         tide_height = pyTMD.predict.map(
             tide_time, self.hc, self.model_constituents, corrections=self.model.format
         )
-        tide_data = tide_height.data
+        tide_data = tide_height.item(0)
 
         return tide_data
 

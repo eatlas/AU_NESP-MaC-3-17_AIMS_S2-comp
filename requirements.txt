@@ -1,4 +1,6 @@
-earthengine-api=0.1.391=pyhd8ed1ab_0   # channel: conda-forge
-pandas=2.2.1=py39h6a678d5_0
-gdal=3.6.2=pypi_0   # channel: conda-forge
-pytmd=2.1.0=pyhd8ed1ab_0   # channel: conda-forge
+geemap~=0.32.0
+numpy~=1.19.3
+pytmd~=2.1.1   # channel: conda-forge
+earthengine-api~=0.1.391  # channel: conda-forge
+pandas~=2.2.1
+gdal~=3.6.2   # channel: conda-forge

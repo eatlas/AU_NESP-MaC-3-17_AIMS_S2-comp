@@ -144,9 +144,8 @@ class Sentinel2Processor:
             tile_id, max_cloud_cover, start_date, end_date
         )
 
-        # apply corrections
-        if correct_sun_glint:
-            composite_collection = composite_collection.map(self.remove_sun_glint)
+        # Remove images with a high level of sun-glint
+        composite_collection = self.filter_high_sun_glint_images(composite_collection)
 
         # add a dictionary with relevant properties for easier access later
         def add_dictionary(image):
@@ -155,9 +154,10 @@ class Sentinel2Processor:
             properties = ee.Dictionary(image.toDictionary(properties))
             # Set the dictionary as a property of the image
             return image.set("tide_properties", properties)
+
         composite_collection = composite_collection.map(add_dictionary)
 
-        # split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
+        # Split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
         # "SENSING_ORBIT_NUMBER". For example, you can have a smaller triangle on the left side of a tile and a bigger
         # section on the right side. If you filter for low tide images, you could end up with 9 small triangle images
         # for the left side and only 1 bigger section for the right side. This would make using 10 images for a
@@ -212,6 +212,10 @@ class Sentinel2Processor:
         # Create a filter based on the 'system:index' property
         index_filter = ee.Filter.inList("system:index", index_list)
         filtered_collection = composite_collection.filter(index_filter)
+
+        # apply corrections
+        if correct_sun_glint:
+            filtered_collection = filtered_collection.map(self.remove_sun_glint)
 
         # create and return composite from filtered collection
         return self._create_composite(filtered_collection, percentile)
@@ -294,6 +298,67 @@ class Sentinel2Processor:
         composite = composite.clip(composite_collection.geometry().dissolve())
 
         return composite
+
+    def filter_high_sun_glint_images(self, composite_collection):
+        """
+        Filter out high sun-glint images from collection. To determine high sun-glint images, a mask is created for
+        all pixels above a high reflectance threshold for the near-infrared and short-wave infrared bands. Then the
+        proportion of this is calculated and compared against a sun-glint threshold. If the image exceeds this threshold,
+        it is filtered out. As we are only interested in the water pixels, a water mask is created using NDWI.
+
+        Note: The threshold values have been manually determined by looking at various scenes around the north/
+        north-west coast of Australia.
+
+        :param {ee.ImageCollection} composite_collection: The collection of images to build the composite image.
+        :return: {ee.ImageCollection} The collection containing no high sun-glint images.
+        """
+        # Define the thresholds for high reflectance in NIR and SWIR bands
+        sun_glint_threshold_nir = 0.1
+        sun_glint_threshold_swir = 0.05
+
+        # Define a threshold for acceptable sun-glint proportion
+        sun_glint_proportion_threshold = 0.2
+
+        # Create a water mask using NDWI
+        def create_water_mask(image):
+            ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')
+            water_mask = ndwi.gt(0)
+            return water_mask
+
+        # Function to create a sun-glint mask and calculate the proportion of high-glint pixels
+        def calculate_sun_glint_proportion(image):
+            # Create the water mask
+            water_mask = create_water_mask(image)
+
+            # NIR and average of SWIR bands
+            nir_band = image.select('B8')
+            swir_band = image.select('B11').add(image.select('B12')).divide(2) 
+
+            # Create sun-glint mask by comparign the NIR and SWIR bands against high reflectance thresholds
+            sun_glint_mask = nir_band.gt(sun_glint_threshold_nir).Or(swir_band.gt(sun_glint_threshold_swir))
+
+            # Apply water mask to the sun-glint mask
+            sun_glint_in_water_mask = sun_glint_mask.updateMask(water_mask)
+
+            # Calculate the proportion of high sun-glint pixels in water areas
+            sun_glint_proportion = sun_glint_in_water_mask.reduceRegion(
+                reducer=ee.Reducer.mean(),
+                geometry=image.geometry(),
+                scale=30,
+                maxPixels=1e19
+            ).values().get(0)
+
+            # Add a property with the sun-glint proportion to the image
+            return image.set('sun_glint_proportion', sun_glint_proportion)
+
+        # Apply the function to each image in the collection
+        images_with_sun_glint_proportion = composite_collection.map(calculate_sun_glint_proportion)
+
+        # Filter the collection to exclude images with high glint proportion
+        filtered_collection = images_with_sun_glint_proportion.filter(
+            ee.Filter.lt('sun_glint_proportion', sun_glint_proportion_threshold))
+
+        return filtered_collection
 
     def get_composite_collection(self, tile_id, max_cloud_cover, start_date, end_date):
         """

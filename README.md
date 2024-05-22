@@ -11,7 +11,7 @@ scripts are written in Python and use the Google Earth Engine library
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
 2024-05-16 - Add capability to create low-tide composites and near infrared false colour style (Git tag: 
-"low-tide_composites_v1")  
+"low_tide_composites_v1")  
 2024-03-07 - Initial release draft composites using 15th percentile (Git tag: "composites_v1")
 
 ## Datasets
@@ -22,7 +22,7 @@ datasets. These additions will be noted in this change log.
   near-infrared-false-colour settings.  
   *Metadata:* https://eatlas.org.au/data/uuid/ec1db691-3729-4635-a01c-378263e539b6  
   *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_low-tide_p30  
-  *Git tag:* "tide_composites_v1"
+  *Git tag:* "low_tide_composites_v1"
 
 - ***15th percentile true colour - draft version 1 2024:***  
   A first draft version of clear-water composite images for the northern Australian seascape using the 15th

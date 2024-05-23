@@ -41,9 +41,11 @@ class Sentinel2Processor:
                                "(Level-2A)",
                 "visParams": {
                     "bands": ["B4", "B3", "B2"],
-                    "gamma": [1, 1, 1],
+                    "gamma": [2, 2, 2],
                     "min": [0, 0, 0],
                     "max": [1, 1, 1],
+                    "multiplier": [6, 6, 6],
+                    "black_point_correction": [0.01, 0.03, 0.058]
                 },
             },
             "RedEdgeB5": {
@@ -53,6 +55,7 @@ class Sentinel2Processor:
                     "gamma": [1],
                     "min": [0.0],
                     "max": [0.45],
+                    "multiplier": [1]
                 },
             },
             "NearInfraredB8": {
@@ -62,15 +65,17 @@ class Sentinel2Processor:
                     "gamma": [1],
                     "min": [0.0],
                     "max": [0.45],
+                    "multiplier": [1]
                 },
             },
             "NearInfraredFalseColour": {
                 "description": "False colour image from infrared bands using B12, B8, B5",
                 "visParams": {
                     "bands": ["B12", "B8", "B5"],
-                    "gamma": [0.8, 0.8, 0.8],
+                    "gamma": [1.25, 1.25, 1.25],
                     "min": [0.0, 0.0, 0.0],
                     "max": [1, 1, 1],
+                    "multiplier": [6, 4, 4]
                 },
             },
         }
@@ -80,14 +85,14 @@ class Sentinel2Processor:
         self.bucket_path = bucket_path
 
     def get_composite(
-        self,
-        tile_id,
-        max_cloud_cover,
-        max_images_in_collection,
-        start_date,
-        end_date,
-        correct_sun_glint=True,
-        percentile=15
+            self,
+            tile_id,
+            max_cloud_cover,
+            max_images_in_collection,
+            start_date,
+            end_date,
+            correct_sun_glint=True,
+            percentile=15
     ):
         """
         Create a composite for the given dates for a certain tile.
@@ -116,14 +121,14 @@ class Sentinel2Processor:
         return self._create_composite(composite_collection, percentile)
 
     def get_low_tide_composite(
-        self,
-        tile_id,
-        max_cloud_cover,
-        max_images_in_collection,
-        start_date,
-        end_date,
-        correct_sun_glint=True,
-        percentile=15
+            self,
+            tile_id,
+            max_cloud_cover,
+            max_images_in_collection,
+            start_date,
+            end_date,
+            correct_sun_glint=True,
+            percentile=15
     ):
         """
         Create a low-tide composite for the given dates for a certain tile.
@@ -332,7 +337,7 @@ class Sentinel2Processor:
 
             # NIR and average of SWIR bands
             nir_band = image.select('B8')
-            swir_band = image.select('B11').add(image.select('B12')).divide(2) 
+            swir_band = image.select('B11').add(image.select('B12')).divide(2)
 
             # Create sun-glint mask by comparign the NIR and SWIR bands against high reflectance thresholds
             sun_glint_mask = nir_band.gt(sun_glint_threshold_nir).Or(swir_band.gt(sun_glint_threshold_swir))
@@ -387,7 +392,7 @@ class Sentinel2Processor:
         return composite_collection
 
     def export_to_cloud(
-        self, normalised_image, name, tile_id, selected_vis_option, scale=10
+            self, normalised_image, name, tile_id, selected_vis_option, scale=10
     ):
         """
         Export the composite image to cloud storage.
@@ -472,22 +477,11 @@ class Sentinel2Processor:
         set of images, trying to determine a set of values that represent a good compromise across different water
         surface conditions.
 
-        Algorithm:
-        threshold = 0.04
-        g = 0.5
-
-        sg = s8 < threshold? s8: threshold
-
-        b2 = Math.pow(6 * (s2 - (sg*0.85)-0.058),g)
-        b3 = Math.pow(6 * (s3 - (sg*0.9)-0.030),g)
-        b4 = Math.pow(6 * (s4 - (sg*0.95)-0.01),g)
-
         :param {ee.Image} normalised_image: The image for which the sun glint should be removed with normalised values between 0 and 1
         :return: {ee.Image}
         """
 
         sun_glint_threshold = 0.04
-        gamma = 0.5
 
         # select relevant bands and transform values to be withing 0 to 1
         band_b2 = normalised_image.select("B2")
@@ -504,21 +498,9 @@ class Sentinel2Processor:
         )
 
         # Apply sun glint corrections to each visible band
-        band_b2 = (
-            (band_b2.subtract(sun_glint.multiply(0.85)).subtract(0.058)).clamp(0, 1)
-            .multiply(6)
-            .pow(gamma)
-        )
-        band_b3 = (
-            (band_b3.subtract(sun_glint.multiply(0.9)).subtract(0.03)).clamp(0, 1)
-            .multiply(6)
-            .pow(gamma)
-        )
-        band_b4 = (
-            (band_b4.subtract(sun_glint.multiply(0.95)).subtract(0.01)).clamp(0, 1)
-            .multiply(6)
-            .pow(gamma)
-        )
+        band_b2 = (band_b2.subtract(sun_glint.multiply(0.85))).clamp(0, 1)
+        band_b3 = (band_b3.subtract(sun_glint.multiply(0.9))).clamp(0, 1)
+        band_b4 = (band_b4.subtract(sun_glint.multiply(0.95))).clamp(0, 1)
 
         # Replace the visible bands in the image with the corrected bands
         return normalised_image.addBands(
@@ -560,31 +542,27 @@ class Sentinel2Processor:
         vis_params = self.VIS_OPTIONS[selected_vis_option]["visParams"]
 
         if len(vis_params["bands"]) == 3:
-
-            if selected_vis_option == "NearInfraredFalseColour":
-                red_band = (
-                    normalised_image.select(vis_params["bands"][0])
-                    .subtract(vis_params["min"][0])
-                    .divide(vis_params["max"][0] - vis_params["min"][0])
-                    .clamp(0, 1)
-                    .multiply(6)
-                    .pow(vis_params["gamma"][0])
+            if selected_vis_option == "TrueColour":
+                red_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][0]).subtract(vis_params["black_point_correction"][0]),
+                    vis_params["min"][0],
+                    vis_params["max"][0],
+                    vis_params["gamma"][0],
+                    vis_params["multiplier"][0]
                 )
-                green_band = (
-                    normalised_image.select(vis_params["bands"][1])
-                    .subtract(vis_params["min"][1])
-                    .divide(vis_params["max"][1] - vis_params["min"][1])
-                    .clamp(0, 1)
-                    .multiply(4)
-                    .pow(vis_params["gamma"][1])
+                green_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][1]).subtract(vis_params["black_point_correction"][1]),
+                    vis_params["min"][1],
+                    vis_params["max"][1],
+                    vis_params["gamma"][1],
+                    vis_params["multiplier"][1]
                 )
-                blue_band = (
-                    normalised_image.select(vis_params["bands"][2])
-                    .subtract(vis_params["min"][2])
-                    .divide(vis_params["max"][2] - vis_params["min"][2])
-                    .clamp(0, 1)
-                    .multiply(4)
-                    .pow(vis_params["gamma"][2])
+                blue_band = self.enhance_contrast(
+                    normalised_image.select(vis_params["bands"][2]).subtract(vis_params["black_point_correction"][2]),
+                    vis_params["min"][2],
+                    vis_params["max"][2],
+                    vis_params["gamma"][2],
+                    vis_params["multiplier"][2]
                 )
 
             else:
@@ -593,33 +571,38 @@ class Sentinel2Processor:
                     vis_params["min"][0],
                     vis_params["max"][0],
                     vis_params["gamma"][0],
+                    vis_params["multiplier"][0]
                 )
                 green_band = self.enhance_contrast(
                     normalised_image.select(vis_params["bands"][1]),
                     vis_params["min"][1],
                     vis_params["max"][1],
                     vis_params["gamma"][1],
+                    vis_params["multiplier"][1]
                 )
                 blue_band = self.enhance_contrast(
                     normalised_image.select(vis_params["bands"][2]),
                     vis_params["min"][2],
                     vis_params["max"][2],
                     vis_params["gamma"][2],
+                    vis_params["multiplier"][2]
                 )
 
             result_image = ee.Image.rgb(red_band, green_band, blue_band)
+
         else:
             result_image = self.enhance_contrast(
                 normalised_image.select(vis_params["bands"][0]),
                 vis_params["min"][0],
                 vis_params["max"][0],
                 vis_params["gamma"][0],
+                vis_params["multiplier"][0]
             )
 
         return result_image
 
     @staticmethod
-    def enhance_contrast(normalised_image, min, max, gamma):
+    def enhance_contrast(normalised_image, min, max, gamma, multiplier):
         """
         Applies a contrast enhancement to the image, limiting the image between the min and max and applying a gamma
         correction.
@@ -628,10 +611,16 @@ class Sentinel2Processor:
         :param {float} min: The minimum value for the value range.
         :param {float} max: The maximum value for the value range.
         :param {float} gamma: The gamma correction value.
+        :param {float} multiplier: A value which is applied before the gamma correction.
         :return: {ee.Image} The modified image.
         """
         return (
-            normalised_image.subtract(min).divide(max - min).clamp(0, 1).pow(1 / gamma)
+            normalised_image
+            .subtract(min)
+            .divide(max - min)
+            .multiply(multiplier)
+            .clamp(0, 1)
+            .pow(1 / gamma)
         )
 
     @staticmethod
@@ -759,7 +748,7 @@ class Sentinel2Processor:
 
     @staticmethod
     def _get_s2_cloud_shadow_mask(
-        normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
+            normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
     ):
         """
         Estimate the cloud and shadow mask for a given image. This uses the following

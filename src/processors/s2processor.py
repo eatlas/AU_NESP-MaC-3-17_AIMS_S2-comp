@@ -107,18 +107,68 @@ class Sentinel2Processor:
         :return: {ee.Image}
         """
 
+        # Get the initial image collection filtered by date and maximum cloud cover
         composite_collection = self.get_composite_collection(
             tile_id, max_cloud_cover, start_date, end_date
         )
-        composite_collection = composite_collection.limit(
-            max_images_in_collection, "CLOUDY_PIXEL_PERCENTAGE", True
-        )
+
+        # Remove images with a high level of sun-glint
+        composite_collection = self.filter_high_sun_glint_images(composite_collection)
+
+        # add a dictionary with relevant filtering and sorting properties for easier access later
+        def add_dictionary(image):
+            properties = ["system:index", "CLOUDY_PIXEL_PERCENTAGE"]
+            # Get the dictionary of properties with only wanted keys
+            properties = ee.Dictionary(image.toDictionary(properties))
+            # Set the dictionary as a property of the image
+            return image.set("cloud_properties", properties)
+        composite_collection = composite_collection.map(add_dictionary)
+
+        # Split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
+        # "SENSING_ORBIT_NUMBER". For example, you can have a smaller triangle on the left side of a tile and a bigger
+        # section on the right side. If you filter for low tide images, you could end up with 9 small triangle images
+        # for the left side and only 1 bigger section for the right side. This would make using 10 images for a
+        # composite redundant.
+        orbit_numbers = composite_collection.aggregate_array(
+            "SENSING_ORBIT_NUMBER"
+        ).distinct().getInfo()
+
+        # Create ImageCollections for each orbit number and filter for low tide images
+        system_index_values = []
+        for orbit_number in orbit_numbers:
+            orbit_collection = composite_collection.filter(
+                ee.Filter.eq("SENSING_ORBIT_NUMBER", orbit_number)
+            )
+
+            cloud_properties_list = orbit_collection.aggregate_array(
+                "cloud_properties"
+            ).getInfo()
+
+            # Sort cloud_properties_list list to get the lowest cloud coverage images
+            lowest_cloud_coverage_properties_list = sorted(
+                cloud_properties_list, key=lambda x: x["CLOUDY_PIXEL_PERCENTAGE"]
+            )
+
+            # Select max_images_in_collection of lowest tide images
+            low_cloud_image_list = lowest_cloud_coverage_properties_list[0:max_images_in_collection]
+
+            # Extract the ID for filtering
+            orbit_system_index_values = [d["system:index"] for d in low_cloud_image_list]
+            system_index_values += orbit_system_index_values
+
+        # Construct an Earth Engine list from the Python list
+        index_list = ee.List(system_index_values)
+
+        # Create a filter based on the 'system:index' property
+        index_filter = ee.Filter.inList("system:index", index_list)
+        filtered_collection = composite_collection.filter(index_filter)
 
         # apply corrections
         if correct_sun_glint:
-            composite_collection = composite_collection.map(self.remove_sun_glint)
+            filtered_collection = filtered_collection.map(self.remove_sun_glint)
 
-        return self._create_composite(composite_collection, percentile)
+        # create and return composite from filtered collection
+        return self._create_composite(filtered_collection, percentile)
 
     def get_low_tide_composite(
             self,
@@ -304,7 +354,8 @@ class Sentinel2Processor:
 
         return composite
 
-    def filter_high_sun_glint_images(self, composite_collection):
+    @staticmethod
+    def filter_high_sun_glint_images(composite_collection):
         """
         Filter out high sun-glint images from collection. To determine high sun-glint images, a mask is created for
         all pixels above a high reflectance threshold for the near-infrared and short-wave infrared bands. Then the

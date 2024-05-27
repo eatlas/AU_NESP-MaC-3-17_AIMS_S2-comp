@@ -87,6 +87,11 @@ class Sentinel2Processor:
             },
         }
 
+        # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
+        self.exclude_tile_ids = [
+            '20160605T015625_20160605T065121_T51KWB'
+        ]
+
         # Settings for exporting images to cloud storage
         self.bucket_name = bucket_name
         self.bucket_path = bucket_path
@@ -442,7 +447,10 @@ class Sentinel2Processor:
             .filterDate(ee.Date(start_date), ee.Date(end_date))
             .filter(
                 ee.Filter.gt("system:asset_size", 100000000)
-            )  # Remove small fragments of tiles
+            )   # Remove small fragments of tiles
+            .filter(
+                ee.Filter.inList('system:index', self.exclude_tile_ids).Not()
+            )   # Remove broken images
         )
 
         composite_collection = composite_collection.map(self.normalise_image)

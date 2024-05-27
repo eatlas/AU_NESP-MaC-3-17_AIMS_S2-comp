@@ -41,11 +41,12 @@ class Sentinel2Processor:
                                "(Level-2A)",
                 "visParams": {
                     "bands": ["B4", "B3", "B2"],
-                    "gamma": [2, 2, 2],
+                    "gamma": [2, 2, 2.3],
                     "min": [0, 0, 0],
                     "max": [1, 1, 1],
                     "multiplier": [6, 6, 6],
-                    "black_point_correction": [0.01, 0.03, 0.058]
+                    "black_point_correction": [0.012, 0.031, 0.064],
+                    "brightness_correction": [0.005, 0.005, 0.0015]
                 },
             },
             "RedEdgeB5": {
@@ -55,7 +56,9 @@ class Sentinel2Processor:
                     "gamma": [1],
                     "min": [0.0],
                     "max": [0.45],
-                    "multiplier": [1]
+                    "multiplier": [1],
+                    "black_point_correction": [0],
+                    "brightness_correction": [0]
                 },
             },
             "NearInfraredB8": {
@@ -65,7 +68,9 @@ class Sentinel2Processor:
                     "gamma": [1],
                     "min": [0.0],
                     "max": [0.45],
-                    "multiplier": [1]
+                    "multiplier": [1],
+                    "black_point_correction": [0],
+                    "brightness_correction": [0]
                 },
             },
             "NearInfraredFalseColour": {
@@ -75,7 +80,9 @@ class Sentinel2Processor:
                     "gamma": [1.25, 1.25, 1.25],
                     "min": [0.0, 0.0, 0.0],
                     "max": [1, 1, 1],
-                    "multiplier": [6, 4, 4]
+                    "multiplier": [6, 4, 4],
+                    "black_point_correction": [0, 0, 0],
+                    "brightness_correction": [0, 0, 0]
                 },
             },
         }
@@ -593,62 +600,46 @@ class Sentinel2Processor:
         vis_params = self.VIS_OPTIONS[selected_vis_option]["visParams"]
 
         if len(vis_params["bands"]) == 3:
-            if selected_vis_option == "TrueColour":
-                red_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][0]).subtract(vis_params["black_point_correction"][0]),
-                    vis_params["min"][0],
-                    vis_params["max"][0],
-                    vis_params["gamma"][0],
-                    vis_params["multiplier"][0]
-                )
-                green_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][1]).subtract(vis_params["black_point_correction"][1]),
-                    vis_params["min"][1],
-                    vis_params["max"][1],
-                    vis_params["gamma"][1],
-                    vis_params["multiplier"][1]
-                )
-                blue_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][2]).subtract(vis_params["black_point_correction"][2]),
-                    vis_params["min"][2],
-                    vis_params["max"][2],
-                    vis_params["gamma"][2],
-                    vis_params["multiplier"][2]
+            bands = []
+            for band_index, band_name in enumerate(vis_params["bands"]):
+                band = normalised_image.select(band_name)
+ 
+                # Correct black point
+                band = band.subtract(vis_params["black_point_correction"][band_index])
+
+                # Enhance the contrast by stretching the band values
+                band = self.enhance_contrast(
+                    band,
+                    vis_params["min"][band_index],
+                    vis_params["max"][band_index],
+                    vis_params["gamma"][band_index],
+                    vis_params["multiplier"][band_index]
                 )
 
-            else:
-                red_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][0]),
-                    vis_params["min"][0],
-                    vis_params["max"][0],
-                    vis_params["gamma"][0],
-                    vis_params["multiplier"][0]
-                )
-                green_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][1]),
-                    vis_params["min"][1],
-                    vis_params["max"][1],
-                    vis_params["gamma"][1],
-                    vis_params["multiplier"][1]
-                )
-                blue_band = self.enhance_contrast(
-                    normalised_image.select(vis_params["bands"][2]),
-                    vis_params["min"][2],
-                    vis_params["max"][2],
-                    vis_params["gamma"][2],
-                    vis_params["multiplier"][2]
-                )
+                # Correct the brightness
+                band = band.add(vis_params["brightness_correction"][band_index])
 
-            result_image = ee.Image.rgb(red_band, green_band, blue_band)
+                bands.append(band)
+
+            result_image = ee.Image.rgb(bands[0], bands[1], bands[2])
 
         else:
+            result_image = normalised_image.select(vis_params["bands"][0])
+
+            # Correct black point
+            result_image = result_image.subtract(vis_params["black_point_correction"][0])
+
+            # Enhance the contrast by stretching the band values
             result_image = self.enhance_contrast(
-                normalised_image.select(vis_params["bands"][0]),
+                result_image,
                 vis_params["min"][0],
                 vis_params["max"][0],
                 vis_params["gamma"][0],
                 vis_params["multiplier"][0]
             )
+
+            # Correct the brightness
+            result_image = result_image.add(vis_params["brightness_correction"][0])
 
         return result_image
 

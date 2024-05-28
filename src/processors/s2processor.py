@@ -6,17 +6,19 @@
 # Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
 
 from datetime import datetime, timezone
+import ee
+import time
+
 import os
 import sys
 
-# Adjust sys path to include TidePredictor
+# Adjust sys path to include utility classes
 current_dir = os.path.dirname(os.path.abspath(__file__))
 utilities_path = os.path.join(current_dir, "../utilities")
 sys.path.append(utilities_path)
 
-import ee
-import time
-from tidePredictor import TidePredictor
+from tide_predictor import TidePredictor
+from logger_setup import LoggerSetup
 
 
 class Sentinel2Processor:
@@ -87,6 +89,9 @@ class Sentinel2Processor:
             },
         }
 
+        # Initialize the logger using LoggerSetup
+        self.logger = LoggerSetup().get_logger()
+
         # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
         self.exclude_tile_ids = [
             '20160605T015625_20160605T065121_T51KWB'
@@ -118,6 +123,10 @@ class Sentinel2Processor:
         :param {Integer} percentile: The percentile to reduce the collection to the composite image
         :return: {ee.Image}
         """
+        self.logger.info(
+            f"{tile_id} - get_composite with max_cloud_cover: {max_cloud_cover}, max_images_in_collection: "
+            + f"{max_images_in_collection}, start_date: {start_date}, end_date: {end_date}, correct_sun_glint: "
+            + f"{correct_sun_glint}, percentile: {percentile}")
 
         # Get the initial image collection filtered by date and maximum cloud cover
         composite_collection = self.get_composite_collection(
@@ -134,6 +143,7 @@ class Sentinel2Processor:
             properties = ee.Dictionary(image.toDictionary(properties))
             # Set the dictionary as a property of the image
             return image.set("cloud_properties", properties)
+
         composite_collection = composite_collection.map(add_dictionary)
 
         # Split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
@@ -144,6 +154,7 @@ class Sentinel2Processor:
         orbit_numbers = composite_collection.aggregate_array(
             "SENSING_ORBIT_NUMBER"
         ).distinct().getInfo()
+        self.logger.info(f"{tile_id} - Orbit numbers: {len(orbit_numbers)}")
 
         # Create ImageCollections for each orbit number and filter for low tide images
         system_index_values = []
@@ -166,7 +177,10 @@ class Sentinel2Processor:
 
             # Extract the ID for filtering
             orbit_system_index_values = [d["system:index"] for d in low_cloud_image_list]
+            self.logger.info(f"{tile_id} - Images in orbit number {orbit_number}: {len(orbit_system_index_values)}")
             system_index_values += orbit_system_index_values
+
+        self.logger.info(f"{tile_id} - Images in composite: {len(system_index_values)}")
 
         # Construct an Earth Engine list from the Python list
         index_list = ee.List(system_index_values)
@@ -204,6 +218,10 @@ class Sentinel2Processor:
         :param {Integer} percentile: The percentile to reduce the collection to the composite image
         :return: {ee.Image}
         """
+        self.logger.info(
+            f"{tile_id} - get_low_tide_composite with max_cloud_cover: {max_cloud_cover}, max_images_in_collection: "
+            + f"{max_images_in_collection}, start_date: {start_date}, end_date: {end_date}, correct_sun_glint: "
+            + f"{correct_sun_glint}, percentile: {percentile}")
 
         tide_predictor = TidePredictor(tile_id)
 
@@ -231,11 +249,12 @@ class Sentinel2Processor:
         # composite redundant.
         orbit_numbers = composite_collection.aggregate_array(
             "SENSING_ORBIT_NUMBER"
-        ).distinct()
+        ).distinct().getInfo()
+        self.logger.info(f"{tile_id} - Orbit numbers: {len(orbit_numbers)}")
 
         # Create ImageCollections for each orbit number and filter for low tide images
         system_index_values = []
-        for orbit_number in orbit_numbers.getInfo():
+        for orbit_number in orbit_numbers:
             orbit_collection = composite_collection.filter(
                 ee.Filter.eq("SENSING_ORBIT_NUMBER", orbit_number)
             )
@@ -271,7 +290,10 @@ class Sentinel2Processor:
 
             # Extract the ID for filtering
             orbit_system_index_values = [d["system:index"] for d in tide_image_list]
+            self.logger.info(f"{tile_id} - Images in orbit number {orbit_number}: {len(orbit_system_index_values)}")
             system_index_values += orbit_system_index_values
+
+        self.logger.info(f"{tile_id} - Images in composite: {len(system_index_values)}")
 
         # Construct an Earth Engine list from the Python list
         index_list = ee.List(system_index_values)
@@ -447,10 +469,10 @@ class Sentinel2Processor:
             .filterDate(ee.Date(start_date), ee.Date(end_date))
             .filter(
                 ee.Filter.gt("system:asset_size", 100000000)
-            )   # Remove small fragments of tiles
+            )  # Remove small fragments of tiles
             .filter(
                 ee.Filter.inList('system:index', self.exclude_tile_ids).Not()
-            )   # Remove broken images
+            )  # Remove broken images
         )
 
         composite_collection = composite_collection.map(self.normalise_image)
@@ -611,7 +633,7 @@ class Sentinel2Processor:
             bands = []
             for band_index, band_name in enumerate(vis_params["bands"]):
                 band = normalised_image.select(band_name)
- 
+
                 # Correct black point
                 band = band.subtract(vis_params["black_point_correction"][band_index])
 

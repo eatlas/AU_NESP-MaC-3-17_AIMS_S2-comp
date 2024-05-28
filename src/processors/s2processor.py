@@ -19,6 +19,8 @@ sys.path.append(utilities_path)
 
 from tide_predictor import TidePredictor
 from logger_setup import LoggerSetup
+from sun_glint_handler import SunGlintHandler
+from cloud_handler import CloudHandler
 
 
 class Sentinel2Processor:
@@ -89,8 +91,12 @@ class Sentinel2Processor:
             },
         }
 
-        # Initialize the logger using LoggerSetup
+        # Initialise the logger
         self.logger = LoggerSetup().get_logger()
+
+        # Initialise the handlers
+        self.sun_glint_handler = SunGlintHandler()
+        self.cloud_handler = CloudHandler()
 
         # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
         self.exclude_tile_ids = [
@@ -129,12 +135,12 @@ class Sentinel2Processor:
             + f"{correct_sun_glint}, percentile: {percentile}")
 
         # Get the initial image collection filtered by date and maximum cloud cover
-        composite_collection = self.get_composite_collection(
+        composite_collection = self._get_composite_collection(
             tile_id, max_cloud_cover, start_date, end_date
         )
 
         # Remove images with a high level of sun-glint
-        composite_collection = self.filter_high_sun_glint_images(composite_collection)
+        composite_collection = self.sun_glint_handler.filter_high_sun_glint_images(composite_collection)
 
         # add a dictionary with relevant filtering and sorting properties for easier access later
         def add_dictionary(image):
@@ -191,7 +197,7 @@ class Sentinel2Processor:
 
         # apply corrections
         if correct_sun_glint:
-            filtered_collection = filtered_collection.map(self.remove_sun_glint)
+            filtered_collection = filtered_collection.map(self.sun_glint_handler.remove_sun_glint)
 
         # create and return composite from filtered collection
         return self._create_composite(filtered_collection, percentile)
@@ -225,12 +231,12 @@ class Sentinel2Processor:
 
         tide_predictor = TidePredictor(tile_id)
 
-        composite_collection = self.get_composite_collection(
+        composite_collection = self._get_composite_collection(
             tile_id, max_cloud_cover, start_date, end_date
         )
 
         # Remove images with a high level of sun-glint
-        composite_collection = self.filter_high_sun_glint_images(composite_collection)
+        composite_collection = self.sun_glint_handler.filter_high_sun_glint_images(composite_collection)
 
         # add a dictionary with relevant properties for easier access later
         def add_dictionary(image):
@@ -304,180 +310,10 @@ class Sentinel2Processor:
 
         # apply corrections
         if correct_sun_glint:
-            filtered_collection = filtered_collection.map(self.remove_sun_glint)
+            filtered_collection = filtered_collection.map(self.sun_glint_handler.remove_sun_glint)
 
         # create and return composite from filtered collection
         return self._create_composite(filtered_collection, percentile)
-
-    def _create_composite(self, composite_collection, percentile=15):
-        """
-        Creates a single composite image from a collection of images by using a 15th percentile reducer. Initially it
-        creates two composite images: one without cloud masking, and one with cloud masking. The composite without cloud
-        masking is put behind the composite with cloud masking to make sure there are no holes in the image.
-
-        :param composite_collection: The collection of images to build the composite image.
-        :param {Integer} percentile: The percentile to reduce the collection to the composite image.
-        :return: {ee.Image}
-        """
-
-        img_bands = [
-            "B1",
-            "B2",
-            "B3",
-            "B4",
-            "B5",
-            "B6",
-            "B7",
-            "B8",
-            "B8A",
-            "B9",
-            "B10",
-            "B11",
-            "B12",
-            "QA10",
-            "QA20",
-            "QA60",
-        ]
-
-        # Create a duplicate to keep without cloud masks
-        composite_collection_no_cloud_mask = composite_collection.reduce(
-            ee.Reducer.percentile([percentile], ["p" + str(percentile)])
-        ).rename(img_bands)
-
-        # Only process with cloud mask if there is more than one image
-        if composite_collection.size().getInfo() > 1:
-            composite_collection_with_cloud_mask = (
-                composite_collection.map(self.mask_clouds)
-                .reduce(ee.Reducer.percentile([percentile], ["p" + str(percentile)]))
-                .rename(img_bands + ["cloudmask"])
-            )
-
-            # Remove the cloudmask so that the bands match in the mosaic process
-            cloudmask = composite_collection_with_cloud_mask.select("cloudmask")
-            composite_collection_with_cloud_mask = (
-                composite_collection_with_cloud_mask.select(img_bands)
-            )
-
-            # Layer the Cloud masked image over the composite with no cloud masking.
-            # The Cloud masked composite should be a better image than
-            # the no cloud masked composite everywhere except over coral cays (as they
-            # are sometimes interpreted as clouds and thus are holes in the image).
-            # Layer the images so there are no holes.
-            # Last layer is on top
-            composite = ee.ImageCollection(
-                [
-                    composite_collection_no_cloud_mask,
-                    composite_collection_with_cloud_mask,
-                ]
-            ).mosaic()
-
-            # Add the cloud mask back into the image as a band
-            composite = composite.addBands(cloudmask)
-        else:
-            # If there is only a single image then don't use cloud masking.
-            composite = composite_collection_no_cloud_mask
-
-        # Correct for a bug in the reduce process. The reduce process
-        # does not generate an image with the correct geometry. Instead
-        # the composite generated as a geometry set to the whole world.
-        # this can result in subsequent processing to fail or be very
-        # inefficient.
-        # We work around this by clipping the output to the dissolved
-        # geometry of the input collection of images.
-        composite = composite.clip(composite_collection.geometry().dissolve())
-
-        return composite
-
-    @staticmethod
-    def filter_high_sun_glint_images(composite_collection):
-        """
-        Filter out high sun-glint images from collection. To determine high sun-glint images, a mask is created for
-        all pixels above a high reflectance threshold for the near-infrared and short-wave infrared bands. Then the
-        proportion of this is calculated and compared against a sun-glint threshold. If the image exceeds this threshold,
-        it is filtered out. As we are only interested in the water pixels, a water mask is created using NDWI.
-
-        Note: The threshold values have been manually determined by looking at various scenes around the north/
-        north-west coast of Australia.
-
-        :param {ee.ImageCollection} composite_collection: The collection of images to build the composite image.
-        :return: {ee.ImageCollection} The collection containing no high sun-glint images.
-        """
-        # Define the thresholds for high reflectance in NIR and SWIR bands
-        sun_glint_threshold_nir = 0.1
-        sun_glint_threshold_swir = 0.05
-
-        # Define a threshold for acceptable sun-glint proportion
-        sun_glint_proportion_threshold = 0.2
-
-        # Create a water mask using NDWI
-        def create_water_mask(image):
-            ndwi = image.normalizedDifference(['B3', 'B8']).rename('NDWI')
-            water_mask = ndwi.gt(0)
-            return water_mask
-
-        # Function to create a sun-glint mask and calculate the proportion of high-glint pixels
-        def calculate_sun_glint_proportion(image):
-            # Create the water mask
-            water_mask = create_water_mask(image)
-
-            # NIR and average of SWIR bands
-            nir_band = image.select('B8')
-            swir_band = image.select('B11').add(image.select('B12')).divide(2)
-
-            # Create sun-glint mask by comparign the NIR and SWIR bands against high reflectance thresholds
-            sun_glint_mask = nir_band.gt(sun_glint_threshold_nir).Or(swir_band.gt(sun_glint_threshold_swir))
-
-            # Apply water mask to the sun-glint mask
-            sun_glint_in_water_mask = sun_glint_mask.updateMask(water_mask)
-
-            # Calculate the proportion of high sun-glint pixels in water areas
-            sun_glint_proportion = sun_glint_in_water_mask.reduceRegion(
-                reducer=ee.Reducer.mean(),
-                geometry=image.geometry(),
-                scale=30,
-                maxPixels=1e19
-            ).values().get(0)
-
-            # Add a property with the sun-glint proportion to the image
-            return image.set('sun_glint_proportion', sun_glint_proportion)
-
-        # Apply the function to each image in the collection
-        images_with_sun_glint_proportion = composite_collection.map(calculate_sun_glint_proportion)
-
-        # Filter the collection to exclude images with high glint proportion
-        filtered_collection = images_with_sun_glint_proportion.filter(
-            ee.Filter.lt('sun_glint_proportion', sun_glint_proportion_threshold))
-
-        return filtered_collection
-
-    def get_composite_collection(self, tile_id, max_cloud_cover, start_date, end_date):
-        """
-        Get the filtered image collection for a composite image.
-
-        :param {String} tile_id: The Sentinel 2 tile ID
-        :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {String} start_date: Format yyyy-mm-dd
-        :param {String} end_date: Format yyyy-mm-dd
-        :return: {ee.ImageCollection}
-        """
-
-        # get image collection for a point filtered by cloud cover and dates
-        composite_collection = (
-            ee.ImageCollection(self.COLLECTION_ID)
-            .filter(ee.Filter.eq("MGRS_TILE", tile_id))
-            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_cover))
-            .filterDate(ee.Date(start_date), ee.Date(end_date))
-            .filter(
-                ee.Filter.gt("system:asset_size", 100000000)
-            )  # Remove small fragments of tiles
-            .filter(
-                ee.Filter.inList('system:index', self.exclude_tile_ids).Not()
-            )  # Remove broken images
-        )
-
-        composite_collection = composite_collection.map(self.normalise_image)
-
-        return composite_collection
 
     def export_to_cloud(
             self, normalised_image, name, tile_id, selected_vis_option, scale=10
@@ -530,93 +366,6 @@ class Sentinel2Processor:
             print("Polling for task (id: {}).".format(task.id))
             time.sleep(10)
         print("Task finished: " + task.status()["state"])
-
-    @staticmethod
-    def normalise_image(image):
-        """
-        Normalised the bands "B2", "B3", "B4", "B5", "B8", "B9", "B11", and "B12" to values between 0 and 1.
-
-        :param {ee.Image} image: The image to be normalised
-        :return: {ee.Image}
-        """
-        scale_factor = ee.Number(0.0001)  # Sentinel2 channels are 0 - 10000.
-
-        band_b2 = image.select("B2").multiply(scale_factor)
-        band_b3 = image.select("B3").multiply(scale_factor)
-        band_b4 = image.select("B4").multiply(scale_factor)
-        band_b5 = image.select("B5").multiply(scale_factor)
-        band_b8 = image.select("B8").multiply(scale_factor)
-        band_b9 = image.select("B9").multiply(scale_factor)
-        band_b11 = image.select("B11").multiply(scale_factor)
-        band_b12 = image.select("B12").multiply(scale_factor)
-
-        return image.addBands(
-            [band_b2, band_b3, band_b4, band_b5, band_b8, band_b9, band_b11, band_b12],
-            ["B2", "B3", "B4", "B5", "B8", "B9", "B11", "B12"],
-            True,
-        )
-
-    @staticmethod
-    def remove_sun_glint(normalised_image):
-        """
-        This algorithm with its specific values was developed by Eric Lawrey as part of the NESP MaC 3.17 project.
-        The values were determined by fine-tuning the scale between the B8 channel and each individual visible channel
-        (B2, B3 and B4) so that the maximum level of sung lint would be removed. This work was based on a representative
-        set of images, trying to determine a set of values that represent a good compromise across different water
-        surface conditions.
-
-        :param {ee.Image} normalised_image: The image for which the sun glint should be removed with normalised values between 0 and 1
-        :return: {ee.Image}
-        """
-
-        sun_glint_threshold = 0.04
-
-        # select relevant bands and transform values to be withing 0 to 1
-        band_b2 = normalised_image.select("B2")
-        band_b3 = normalised_image.select("B3")
-        band_b4 = normalised_image.select("B4")
-        band_b8 = normalised_image.select("B8")
-
-        # If the B8 value is lower than the threshold, use the threshold. This is to overcome the problem in shallow
-        # areas where B08 infrared channel penetrates the water enough to pick up benthic reflection, making these
-        # regions brighter than just the sun glint.
-        sun_glint = normalised_image.expression(
-            "band_b8 < sun_glint_threshold ? band_b8 : sun_glint_threshold",
-            {"band_b8": band_b8, "sun_glint_threshold": sun_glint_threshold},
-        )
-
-        # Apply sun glint corrections to each visible band
-        band_b2 = (band_b2.subtract(sun_glint.multiply(0.85))).clamp(0, 1)
-        band_b3 = (band_b3.subtract(sun_glint.multiply(0.9))).clamp(0, 1)
-        band_b4 = (band_b4.subtract(sun_glint.multiply(0.95))).clamp(0, 1)
-
-        # Replace the visible bands in the image with the corrected bands
-        return normalised_image.addBands(
-            [band_b2, band_b3, band_b4], ["B2", "B3", "B4"], True
-        )
-
-    def mask_clouds(self, normalised_image):
-        """
-        Apply the cloud mask to each of the image bands. This should be
-        done prior to reducing all the images using median or percentile.
-
-        :param {ee.Image} normalised_image: The image where clouds should be masked with normalised values between 0 and 1
-        :return: {ee.Image}
-        """
-        normalised_image = self._add_s2_cloud_mask(normalised_image)
-        normalised_image = self._add_s2_cloud_shadow_mask(normalised_image)
-
-        # Subset the cloudmask band and invert it so clouds/shadow are 0, else 1.
-        not_cld_shdw = normalised_image.select("cloudmask").Not()
-
-        masked_img = normalised_image.select("B.*").updateMask(not_cld_shdw)
-        # Get remaining QA bands
-        qa_img = normalised_image.select("QA.*")
-
-        # Subset reflectance bands and update their masks, return the result.
-        return masked_img.addBands(qa_img).addBands(
-            normalised_image.select("cloudmask")
-        )
 
     def visualise_image(self, normalised_image, selected_vis_option):
         """
@@ -673,6 +422,139 @@ class Sentinel2Processor:
 
         return result_image
 
+    def _create_composite(self, composite_collection, percentile=15):
+        """
+        Creates a single composite image from a collection of images by using a 15th percentile reducer. Initially it
+        creates two composite images: one without cloud masking, and one with cloud masking. The composite without cloud
+        masking is put behind the composite with cloud masking to make sure there are no holes in the image.
+
+        :param composite_collection: The collection of images to build the composite image.
+        :param {Integer} percentile: The percentile to reduce the collection to the composite image.
+        :return: {ee.Image}
+        """
+
+        img_bands = [
+            "B1",
+            "B2",
+            "B3",
+            "B4",
+            "B5",
+            "B6",
+            "B7",
+            "B8",
+            "B8A",
+            "B9",
+            "B10",
+            "B11",
+            "B12",
+            "QA10",
+            "QA20",
+            "QA60",
+        ]
+
+        # Create a duplicate to keep without cloud masks
+        composite_collection_no_cloud_mask = composite_collection.reduce(
+            ee.Reducer.percentile([percentile], ["p" + str(percentile)])
+        ).rename(img_bands)
+
+        # Only process with cloud mask if there is more than one image
+        if composite_collection.size().getInfo() > 1:
+            composite_collection_with_cloud_mask = (
+                composite_collection.map(self.cloud_handler.mask_clouds)
+                .reduce(ee.Reducer.percentile([percentile], ["p" + str(percentile)]))
+                .rename(img_bands + ["cloudmask"])
+            )
+
+            # Remove the cloudmask so that the bands match in the mosaic process
+            cloudmask = composite_collection_with_cloud_mask.select("cloudmask")
+            composite_collection_with_cloud_mask = (
+                composite_collection_with_cloud_mask.select(img_bands)
+            )
+
+            # Layer the Cloud masked image over the composite with no cloud masking.
+            # The Cloud masked composite should be a better image than
+            # the no cloud masked composite everywhere except over coral cays (as they
+            # are sometimes interpreted as clouds and thus are holes in the image).
+            # Layer the images so there are no holes.
+            # Last layer is on top
+            composite = ee.ImageCollection(
+                [
+                    composite_collection_no_cloud_mask,
+                    composite_collection_with_cloud_mask,
+                ]
+            ).mosaic()
+
+            # Add the cloud mask back into the image as a band
+            composite = composite.addBands(cloudmask)
+        else:
+            # If there is only a single image then don't use cloud masking.
+            composite = composite_collection_no_cloud_mask
+
+        # Correct for a bug in the reduce process. The reduce process
+        # does not generate an image with the correct geometry. Instead
+        # the composite generated as a geometry set to the whole world.
+        # this can result in subsequent processing to fail or be very
+        # inefficient.
+        # We work around this by clipping the output to the dissolved
+        # geometry of the input collection of images.
+        composite = composite.clip(composite_collection.geometry().dissolve())
+
+        return composite
+
+    def _get_composite_collection(self, tile_id, max_cloud_cover, start_date, end_date):
+        """
+        Get the filtered image collection for a composite image.
+
+        :param {String} tile_id: The Sentinel 2 tile ID
+        :param {String} max_cloud_cover: Maximum percentage of cloud cover per image
+        :param {String} start_date: Format yyyy-mm-dd
+        :param {String} end_date: Format yyyy-mm-dd
+        :return: {ee.ImageCollection}
+        """
+
+        # get image collection for a point filtered by cloud cover and dates
+        composite_collection = (
+            ee.ImageCollection(self.COLLECTION_ID)
+            .filter(ee.Filter.eq("MGRS_TILE", tile_id))
+            .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", max_cloud_cover))
+            .filterDate(ee.Date(start_date), ee.Date(end_date))
+            .filter(
+                ee.Filter.gt("system:asset_size", 100000000)
+            )  # Remove small fragments of tiles
+            .filter(
+                ee.Filter.inList('system:index', self.exclude_tile_ids).Not()
+            )  # Remove broken images
+        )
+
+        composite_collection = composite_collection.map(self.normalise_image)
+
+        return composite_collection
+
+    @staticmethod
+    def normalise_image(image):
+        """
+        Normalised the bands "B2", "B3", "B4", "B5", "B8", "B9", "B11", and "B12" to values between 0 and 1.
+
+        :param {ee.Image} image: The image to be normalised
+        :return: {ee.Image}
+        """
+        scale_factor = ee.Number(0.0001)  # Sentinel2 channels are 0 - 10000.
+
+        band_b2 = image.select("B2").multiply(scale_factor)
+        band_b3 = image.select("B3").multiply(scale_factor)
+        band_b4 = image.select("B4").multiply(scale_factor)
+        band_b5 = image.select("B5").multiply(scale_factor)
+        band_b8 = image.select("B8").multiply(scale_factor)
+        band_b9 = image.select("B9").multiply(scale_factor)
+        band_b11 = image.select("B11").multiply(scale_factor)
+        band_b12 = image.select("B12").multiply(scale_factor)
+
+        return image.addBands(
+            [band_b2, band_b3, band_b4, band_b5, band_b8, band_b9, band_b11, band_b12],
+            ["B2", "B3", "B4", "B5", "B8", "B9", "B11", "B12"],
+            True,
+        )
+
     @staticmethod
     def enhance_contrast(normalised_image, min, max, gamma, multiplier):
         """
@@ -693,276 +575,6 @@ class Sentinel2Processor:
             .multiply(multiplier)
             .clamp(0, 1)
             .pow(1 / gamma)
-        )
-
-    @staticmethod
-    def _add_s2_cloud_mask(normalised_image):
-        """
-        This function creates a Sentinel 2 image with matching cloud mask from the COPERNICUS/S2_CLOUD_PROBABILITY
-        dataset.
-
-        Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
-
-        :param {ee.Image} normalised_image: The image to modify with normalised values between 0 and 1.
-        :return: {ee.Image}
-        """
-        # Preserve a copy of the system:index that is not modified
-        # by the merging of image collections.
-        normalised_image = normalised_image.set(
-            "original_id", normalised_image.get("system:index")
-        )
-
-        # The masks for the 10m bands sometimes do not exclude bad data at
-        # scene edges, so we apply masks from the 20m and 60m bands as well.
-        # Example asset that needs this operation:
-        # COPERNICUS/S2_CLOUD_PROBABILITY/20190301T000239_20190301T000238_T55GDP
-        normalised_image = normalised_image.updateMask(
-            normalised_image.select("B8A")
-            .mask()
-            .updateMask(normalised_image.select("B9").mask())
-        )
-
-        # Get the dataset containing high quality cloud masks. Use
-        # this to mask off clouds from the composite. This masking
-        # does not consider cloud shadows and so these can still
-        # affect the final composite.
-        s2_cloud_image = (
-            ee.ImageCollection("COPERNICUS/S2_CLOUD_PROBABILITY")
-            .filter(
-                ee.Filter.equals("system:index", normalised_image.get("original_id"))
-            )
-            .first()
-        )
-        s2_cloud_image = s2_cloud_image.set(
-            "original_id", s2_cloud_image.get("system:index")
-        )
-
-        return normalised_image.set("s2cloudless", s2_cloud_image)
-
-    def _add_s2_cloud_shadow_mask(self, normalised_image):
-        """
-        This function estimates a mask for the clouds and the shadows and adds
-        this as additional bands (highcloudmask, lowcloudmask and cloudmask).
-
-        This assumes that the img has the cloud probability setup from
-        COPERNICUS/S2_CLOUD_PROBABILITY (see `_add_s2_cloud_mask`).
-
-        The mask includes the cloud areas, plus a mask to remove cloud shadows.
-        The shadows are estimated by projecting the cloud mask in the direction
-        opposite the angle to the sun.
-
-        The algorithm does not try to estimate the actual bounds of the shadows
-        based on the image, other than splitting the clouds into two categories.
-
-        This masking process assumes most small clouds are low and thus throw
-        short shadows. It assumes that large clouds are taller and throw
-        longer shadows. The height of the clouds is estimated based on the
-        confidence in the cloud prediction level from COPERNICUS/S2_CLOUD_PROBABILITY,
-        where high probability corresponds to obvious large clouds and lower
-        probabilities pick up smaller clouds. The filtering of high clouds is
-        further refined by performing an erosion and dilation to remove all
-        clouds smaller than 300 m.
-
-        Reference: https://github.com/eatlas/CS_AIMS_Coral-Sea-Features_Img
-
-        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud masks to. Its values should be between 0
-                                            and 1.
-        :return: {ee.Image}
-        """
-
-        # Treat the cloud shadow distance differently for low and high cloud.
-        # High thick clouds can produce long shadows that can muck up the image.
-        # There is no direct way to determine which clouds will throw long dark shadows
-        # however it was found from experimentation that setting a high cloud
-        # probability tended to pick out the thicker clouds that also through
-        # long shadows. It is unclear how robust this approach is though.
-        # Cloud probability threshold (%); values greater are considered cloud
-        low_cloud_mask = self._get_s2_cloud_shadow_mask(
-            normalised_image,
-            35,
-            # (cloud predication prob) Use low probability to pick up smaller
-            # clouds. This threshold still misses a lot of small clouds.
-            # unfortunately lowering the threshold anymore results in sand cays
-            # being detected as clouds.
-            # Note that for the atolls on 06LUJ and 06LWH the cays and shallow
-            # reefs are considered clouds to a high probability. Having a threshold
-            # of 40 results in approx 80% of the atoll rim being masked as a cloud.
-            # Raising the threshold to 60 still results in about 60% being masked
-            # as cloud. A threshold of 80 still masks about 30% of the cay area.
-            # Setting the threshold to 60 results in lots of small clouds remaining
-            # in images. We therefore use a lower threshold to cover off on these
-            # clouds, at the expense of making out from of the cays.
-            0,  # (m) Erosion. Keep small clouds.
-            0.4,  # (km) Use a shorter cloud shadow
-            150,  # (m) buffer distance
-        ).rename("lowcloudmask")
-
-        # Try to detect high thick clouds. Assume that this throw a longer shadow.
-        high_cloud_mask = self._get_s2_cloud_shadow_mask(
-            normalised_image,
-            80,
-            # Use high cloud probability to pick up mainly larger solid clouds
-            300,
-            # (m)  Erosion. Remove small clouds because we are trying to just detect
-            #      the large clouds that will throw long shadows.
-            1.5,  # (km) Use a longer cloud shadow
-            300,  # (m) buffer distance
-        ).rename("highcloudmask")
-
-        # Combine both masks
-        cloud_mask = high_cloud_mask.add(low_cloud_mask).gt(0).rename("cloudmask")
-
-        return (
-            normalised_image.addBands(cloud_mask)
-            .addBands(high_cloud_mask)
-            .addBands(low_cloud_mask)
-        )
-
-    @staticmethod
-    def _get_s2_cloud_shadow_mask(
-            normalised_image, cloud_prob_thresh, erosion, cloud_proj_dist, buffer
-    ):
-        """
-        Estimate the cloud and shadow mask for a given image. This uses the following
-        algorithm:
-        1. Estimate the dark pixels corresponding to cloud shadow pixels using a
-           threshold on the B8 channel. Note that this only works on land. On water
-           this algorithm treats all water as a shadow.
-        2. Calculate the angle of the shadows using the MEAN_SOLAR_AZIMUTH_ANGLE
-        3. Create a cloud mask based on a probability threshold (cloud_prob_thresh) to
-           apply to the COPERNICUS/S2_CLOUD_PROBABILITY data.
-        4. Apply an erosion and dilation (negative then positive buffer) to the
-           cloud mask. This removes all cloud features smaller than the
-           erosion distance.
-        5. Project this cloud mask along the line of the shadow for a distance specified
-           by cloud_proj_dist. The shadows of low clouds will only need a short
-           project distance (~ 0.4 km), whereas high clouds throw longer shadows (~ 1 - 2 km).
-        6. Multiply the dark pixels by the projected cloud shadow. On land this will crop
-           the mask to just the cloud shadow. On water this will retain the whole cloud
-           mask and cloud projection as all the water are considered dark pixels.
-        7. Add the shadow and cloud masks together to get a complete mask. This will
-           ensure a full mask on land, and will have no effect on water areas as the
-           shadow mask already includes the clouded areas.
-        8. Apply a buffer to the mask to expand the area masked out. This is to
-           slightly overcome the imperfect nature of the cloud masks.
-
-        This assumes that the img has the cloud probability setup from
-        COPERNICUS/S2_CLOUD_PROBABILITY (see `_add_s2_cloud_mask`).
-
-        :param {ee.Image} normalised_image: Sentinel 2 image to add the cloud mask to. Assumes that
-                                   the COPERNICUS/S2_CLOUD_PROBABILITY dataset has been merged with
-                                   image (see `_add_s2_cloud_mask`). In this case the probability
-                                   band in the image stored under the s2cloudless property is used.
-                                   The values should normalised to be between 0 and 1.
-        :param {int} cloud_prob_thresh: (0-100) probability threshold to
-                                   apply to the COPERNICUS/S2_CLOUD_PROBABILITY layer to create the
-                                   cloud mask. This basic mask is then has the erosion apply to it,
-                                   is projected along the shadow and a final buffer applied.
-        :param {int} erosion: (m) erosion applied to the initial cloud mask
-                                   prior to creating the cloud shadow project. This can be used to remove
-                                   small cloud features. A dilation (buffer) is applied after the erosion to
-                                   bring the cloud mask features back to their original size (except those
-                                   that were too small and thus disappeared) prior to shadow projection.
-                                   This dilation has the same distance as the erosion.
-        :param {int} cloud_proj_dist: (m) distance to project the cloud mask
-                                   in the direction of shadows.
-        :param {int} buffer: (m) Final buffer to apply to the shadow projected
-                                   cloud mask. This expands the mask in all directions and can be used to
-                                   catch more of the neighbouring cloud areas just outside the cloud
-                                   masking.
-        :return: {ee.Image}
-        """
-
-        nir_drk_thresh = 0.15  # Near-infrared reflectance; values less than are
-        # considered potential cloud shadow. This threshold was
-        # chosen to detect cloud shadows on land areas where
-        # the B8 channel is consistently bright (except in shadows).
-        # All water areas are considered dark by this threshold.
-        # Determine the dark areas on land. This doesn't work on water because all
-        # water appears too dark. As such the simple dark pixels approach only refines
-        # the masking of shadows on land areas. In the water it is determined by
-        # the cloud_proj_dist.
-        dark_pixels = (
-            normalised_image.select("B8").lt(nir_drk_thresh).rename("dark_pixels")
-        )
-
-        # Determine the direction to project cloud shadow from clouds (assumes UTM projection).
-        shadow_azimuth = ee.Number(90).subtract(
-            ee.Number(normalised_image.get("MEAN_SOLAR_AZIMUTH_ANGLE"))
-        )
-
-        # Condition s2cloudless by the probability threshold value.
-        is_cloud = (
-            ee.Image(normalised_image.get("s2cloudless"))
-            .select("probability")
-            .gt(cloud_prob_thresh)
-            .rename("allclouds")
-        )
-
-        if erosion > 0:
-            # Make sure the erosion and dilation filters don't get too large as this
-            # will become too computationally expensive.
-            # We want the filter size to be approximately 4 pixels in size so that
-            # the calculations are smooth enough, but the computations are not too
-            # expensive.
-            # We also have a lower resolution limit of 20 m to save on computations
-            # for full image exports.
-            # Find the scale that would give us approximately a 4 pixel filter or
-            # our lower resolution limit.
-            approx_erosion_pixels = 4  # pixels
-            # Find the resolution of the filter rounded to the nearest 10 m (Sentinel 2 resolution)
-            # Make sure that it isn't smaller than 20 m
-            erosion_scale = max(round(erosion / approx_erosion_pixels / 10) * 10, 20)
-
-            # Operate at a erosion_scale m pixel scale. The focal_min and focal_max operators require
-            # units of pixels and adjust the erosion variable from m to pixels
-            is_cloud_erosion_dilation = (
-                is_cloud.focal_min(erosion / erosion_scale)
-                .focal_max(erosion / erosion_scale)
-                .reproject(
-                    normalised_image.select([0]).projection(), None, erosion_scale
-                )
-                .rename("cloudmask")
-            )
-        else:
-            is_cloud_erosion_dilation = is_cloud
-
-        # Project shadows from clouds for the distance specified by the cloud_proj_dist input.
-        # We use a scale of 100 m to reduce the computations. This results is pixelated
-        # results, however the buffer stage smooths this out.
-        cloud_proj = (
-            is_cloud_erosion_dilation.directionalDistanceTransform(
-                shadow_azimuth, cloud_proj_dist * 10
-            )
-            .reproject(normalised_image.select([0]).projection(), None, 100)
-            .select("distance")
-            .mask()
-            .rename("cloud_transform")
-        )
-
-        # Identify the intersection of dark pixels with cloud shadow projection.
-        shadows = cloud_proj.multiply(dark_pixels).rename("shadows")
-
-        # Add the cloud mask to the shadows. On water the clouds are already
-        # masked off because all the water pixels are considered shadows due to
-        # the limited shadow detection algorith. For land areas the shadows
-        # don't include the cloud mask.
-        # is_cloud_or_shadow = is_cloud.add(shadows).gt(0)
-        is_cloud_or_shadow = cloud_proj
-
-        approx_buffer_pixels = 4  # pixels
-        # Find the resolution of the filter rounded to the nearest 10 m (Sentinel 2 resolution)
-        # Make sure that it isn't smaller than 20 m
-        buffer_scale = max(round(buffer / approx_buffer_pixels / 10) * 10, 20)
-
-        # Remove small cloud-shadow patches and dilate remaining pixels by BUFFER input.
-        # 20 m scale is for speed, and assumes clouds don't require 10 m precision.
-        # Removing the small patches also reduces the False positive rate on
-        # beaches significantly.
-        return (
-            is_cloud_or_shadow.focal_max(buffer / buffer_scale)
-            .reproject(normalised_image.select([0]).projection(), None, buffer_scale)
-            .rename("cloudmask")
         )
 
     @staticmethod

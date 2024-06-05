@@ -19,24 +19,19 @@ ee.Initialize()
 #########################################################
 THREADS = 2
 
-MAX_CLOUD_COVER = 0.1
-MAX_NUMBER_OF_IMAGES_IN_COMPOSITE = 200
+MAX_CLOUD_COVER = 20
+MIN_NUMBER_OF_IMAGES_IN_COMPOSITE = 30
 PERCENTILE = 15
 VIS_OPTION_NAME = 'TrueColour'
 SCALE = 10
 
 # First set of images
 START_DATE = '2015-06-27'
-END_DATE = '2019-05-31'
-FILE_NAME_SUFFIX = "2015-2019"
-
-# Second set of images
-# START_DATE = '2019-06-01'
-# END_DATE = '2024-05-27'
-# FILE_NAME_SUFFIX = "2019-2024"
+END_DATE = '2024-05-31'
+FILE_NAME_SUFFIX = "v2_2015-2024"
 
 BUCKET_NAME = "aims-marb"
-BUCKET_PATH = "composites_15th_percentile_v2_2015-2019/"
+BUCKET_PATH = "composites_15th_percentile_v2_2015-2024/"
 #########################################################
 # End configuration
 #########################################################
@@ -54,9 +49,9 @@ def process_tile_id(tile_id, tile_index):
     :return: The tile index.
     """
     logging.info("%s starting to process %s", tile_index, tile_id)
-    composite = processor.get_composite(tile_id, MAX_CLOUD_COVER, MAX_NUMBER_OF_IMAGES_IN_COMPOSITE, START_DATE,
+    composite = processor.get_composite(tile_id, MAX_CLOUD_COVER, MIN_NUMBER_OF_IMAGES_IN_COMPOSITE, START_DATE,
                                         END_DATE)
-    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p15_" + VIS_OPTION_NAME + "_" + tile_id + "_" + 
+    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p15_" + VIS_OPTION_NAME + "_" + tile_id + "_" +
                               FILE_NAME_SUFFIX, tile_id, VIS_OPTION_NAME, SCALE)
     logging.info("%s finished processing %s", tile_index, tile_id)
     return tile_index

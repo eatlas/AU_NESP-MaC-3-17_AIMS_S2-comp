@@ -18,6 +18,7 @@ utilities_path = os.path.join(current_dir, "../utilities")
 sys.path.append(utilities_path)
 
 from tide_predictor import TidePredictor
+from noise_predictor import NoisePredictor
 from logger_setup import LoggerSetup
 from sun_glint_handler import SunGlintHandler
 from cloud_handler import CloudHandler
@@ -100,7 +101,23 @@ class Sentinel2Processor:
 
         # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
         self.exclude_tile_ids = [
-            '20160605T015625_20160605T065121_T51KWB'
+            '20160605T015625_20160605T065121_T51KWB',
+            '20151121T020412_20151121T021149_T51KWA',
+            '20160419T020758_20160419T085324_T51KWA',
+            '20151121T020412_20170223T032428_T51KWA',
+            '20151121T020412_20170511T115833_T51KWA',
+            '20160419T020422_20160419T020758_T51KWA',
+            '20160728T020452_20160728T021017_T51KWA',
+            '20160728T021017_20160728T084757_T51KWA',
+            '20160926T020442_20160926T021008_T51KWA',
+            '20160926T020442_20160926T084855_T51KWA',
+            '20161026T020442_20161026T020944_T51KWA',
+            '20161026T020442_20161026T084626_T51KWA',
+            '20170916T020739_20170916T021038_T51KWA',
+            '20171006T020739_20171006T021029_T51KWA',
+            '20171115T020429_20171115T021036_T51KWA',
+            '20200821T020449_20200821T020455_T51KWA',
+            '20221015T020451_20221015T020449_T51KWA'
         ]
 
         # Settings for exporting images to cloud storage
@@ -111,7 +128,7 @@ class Sentinel2Processor:
             self,
             tile_id,
             max_cloud_cover,
-            max_images_in_collection,
+            min_images_in_collection,
             start_date,
             end_date,
             correct_sun_glint=True,
@@ -122,7 +139,7 @@ class Sentinel2Processor:
 
         :param {String} tile_id: The Sentinel 2 tile ID
         :param {Float} max_cloud_cover: Maximum percentage of cloud cover per image
-        :param {Integer} max_images_in_collection: Maximum number of images used to create the composite
+        :param {Integer} min_images_in_collection: Minimum number of images used to create the composite
         :param {String} start_date: Format yyyy-mm-dd
         :param {String} end_date: Format yyyy-mm-dd
         :param {Boolean} correct_sun_glint: Should sun-glint correction be applied? Default is True
@@ -130,8 +147,8 @@ class Sentinel2Processor:
         :return: {ee.Image}
         """
         self.logger.info(
-            f"{tile_id} - get_composite with max_cloud_cover: {max_cloud_cover}, max_images_in_collection: "
-            + f"{max_images_in_collection}, start_date: {start_date}, end_date: {end_date}, correct_sun_glint: "
+            f"{tile_id} - get_composite with max_cloud_cover: {max_cloud_cover}, min_images_in_collection: "
+            + f"{min_images_in_collection}, start_date: {start_date}, end_date: {end_date}, correct_sun_glint: "
             + f"{correct_sun_glint}, percentile: {percentile}")
 
         # Get the initial image collection filtered by date and maximum cloud cover
@@ -139,18 +156,7 @@ class Sentinel2Processor:
             tile_id, max_cloud_cover, start_date, end_date
         )
 
-        # Remove images with a high level of sun-glint
-        composite_collection = self.sun_glint_handler.filter_high_sun_glint_images(composite_collection)
-
-        # add a dictionary with relevant filtering and sorting properties for easier access later
-        def add_dictionary(image):
-            properties = ["system:index", "CLOUDY_PIXEL_PERCENTAGE"]
-            # Get the dictionary of properties with only wanted keys
-            properties = ee.Dictionary(image.toDictionary(properties))
-            # Set the dictionary as a property of the image
-            return image.set("cloud_properties", properties)
-
-        composite_collection = composite_collection.map(add_dictionary)
+        noise_predictor = NoisePredictor(self.logger)
 
         # Split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
         # "SENSING_ORBIT_NUMBER". For example, you can have a smaller triangle on the left side of a tile and a bigger
@@ -169,22 +175,13 @@ class Sentinel2Processor:
                 ee.Filter.eq("SENSING_ORBIT_NUMBER", orbit_number)
             )
 
-            cloud_properties_list = orbit_collection.aggregate_array(
-                "cloud_properties"
-            ).getInfo()
+            noise_filtered_collection = noise_predictor.filter_noise_adding_images(orbit_collection,
+                                                                                   min_images_in_collection,
+                                                                                   tile_id, orbit_number)
 
-            # Sort cloud_properties_list list to get the lowest cloud coverage images
-            lowest_cloud_coverage_properties_list = sorted(
-                cloud_properties_list, key=lambda x: x["CLOUDY_PIXEL_PERCENTAGE"]
-            )
-
-            # Select max_images_in_collection of lowest tide images
-            low_cloud_image_list = lowest_cloud_coverage_properties_list[0:max_images_in_collection]
-
-            # Extract the ID for filtering
-            orbit_system_index_values = [d["system:index"] for d in low_cloud_image_list]
-            self.logger.info(f"{tile_id} - Images in orbit number {orbit_number}: {len(orbit_system_index_values)}")
-            system_index_values += orbit_system_index_values
+            id_properties_list = noise_filtered_collection.aggregate_array("system:index").getInfo()
+            self.logger.info(f"{tile_id} - Images in orbit number {orbit_number}: {len(id_properties_list)}")
+            system_index_values += id_properties_list
 
         self.logger.info(f"{tile_id} - Images in composite: {len(system_index_values)}")
 

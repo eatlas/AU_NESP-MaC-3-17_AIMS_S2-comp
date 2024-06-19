@@ -72,7 +72,7 @@ class NoisePredictor:
 
     @staticmethod
     def calculate_noise_in_property_list(filtered_list):
-        # noise_index = [item["noise_index"] for item in filtered_list]
+        # Add a benefit for more images
         noise_index = [item["noise_index"] + 3 / (index + 1) for index, item in enumerate(filtered_list)]
 
         # Calculate the average

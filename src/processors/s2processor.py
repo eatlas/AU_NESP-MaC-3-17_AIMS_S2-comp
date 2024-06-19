@@ -97,9 +97,6 @@ class Sentinel2Processor:
 
         # Initialise the handlers
         self.sun_glint_handler = SunGlintHandler()
-        self.cloud_handler = CloudHandler()
-
-        # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
         self.exclude_tile_ids = [
             '20160605T015625_20160605T065121_T51KWB',
             '20151121T020412_20151121T021149_T51KWA',
@@ -119,6 +116,9 @@ class Sentinel2Processor:
             '20200821T020449_20200821T020455_T51KWA',
             '20221015T020451_20221015T020449_T51KWA'
         ]
+        self.cloud_handler = CloudHandler()
+
+        # List of tile IDs which cause errors. These IDs will be filtered out of the image collection.
 
         # Settings for exporting images to cloud storage
         self.bucket_name = bucket_name

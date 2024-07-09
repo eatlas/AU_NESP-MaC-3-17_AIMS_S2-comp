@@ -129,6 +129,10 @@ class NoisePredictor:
         value = noise_proportion.values().get(0)
 
         # Calculate "noise" by amplifying the noise proportion
-        noise_index = (ee.Number(value).multiply(100).add(noise_offset)).pow(noise_power)
+        noise_index = ee.Algorithms.If(
+            ee.Algorithms.IsEqual(value, None),  # Check if value is None
+            99999999,  # If value==None: set noise_index to very high value
+            (ee.Number(value).multiply(100).add(noise_offset)).pow(noise_power)  # Calculate noise_index otherwise
+        )
 
         return image.set('noise_index', noise_index)

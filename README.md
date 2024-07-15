@@ -1,6 +1,6 @@
 # NESP MaC Project 3.17 - North Australia Sentinel 2 Satellite Composite Imagery
 
-Marc Hammerton - Australian Institute of Marine Science - 06 February 2024
+Marc Hammerton - Australian Institute of Marine Science - 22 July 2024
 
 This repository contains the code to create clear water satellite imagery for the northern Australian seascape. The
 scripts are written in Python and use the Google Earth Engine library
@@ -10,11 +10,20 @@ scripts are written in Python and use the Google Earth Engine library
 
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
+2024-07-22 - Publish version 2 composites using a noise prediction algorithm to only include low noise images in 
+composite (Git tag: "composites_v2")
 2024-05-16 - Add capability to create low-tide composites and near infrared false colour style (Git tag: 
 "low_tide_composites_v1")  
 2024-03-07 - Initial release draft composites using 15th percentile (Git tag: "composites_v1")
 
 ## Datasets
+
+- ***15th percentile true colour - version 2 2024:***  
+  A final version of clear-water composite images for the northern Australian seascape using the 15th
+  percentile from the filtered image collection and visualising with true-colour settings.  
+  *Metadata:* https://eatlas.org.au/data/uuid/c38d2227-25c0-4d1e-adbc-bddb4aac1929  
+  *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_p15-trueColour  
+  *Git tag:* "composites_v2"
 
 - ***low-tide 30th percentile true colour and near infrared false colour - version 1 2024:***  
   A variation to the previous composite images by focusing on low-tide input images for the northern Australian seascape 
@@ -27,8 +36,8 @@ datasets. These additions will be noted in this change log.
 - ***15th percentile true colour - draft version 1 2024:***  
   A first draft version of clear-water composite images for the northern Australian seascape using the 15th
   percentile from the filtered image collection and visualising with true-colour settings.  
-  *Metadata:* https://eatlas.org.au/data/uuid/c38d2227-25c0-4d1e-adbc-bddb4aac1929  
-  *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_S2-comp_p15-trueColour  
+  Note: As of July 2024 deprecated, see version 2. 
+  *Metadata:* https://eatlas.org.au/data/uuid/c38d2227-25c0-4d1e-adbc-bddb4aac1929
   *Git tag:* "composites_v1"
 
 ## Prerequisites
@@ -104,18 +113,19 @@ area between Darwin and Broome
 
 The scripts have variables at the top of the file to manage settings:
 
-| Variable                          | Description                                                                                                                                                             |
-|-----------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| THREADS                           | Number of threads to run the composite creation in parallel.                                                                                                            |
-| MAX_CLOUD_COVER                   | ImageCollection filter: the maximum percentage of cloud cover per image.                                                                                                |
-| MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
-| PERCENTILE                        | The percentile to reduce the collection to the composite image.                                                                                                         |
-| START_DATE                        | ImageCollection filter: The beginning of the period for images to be included.                                                                                          |
-| END_DATE                          | ImageCollection filter: The ending of the period for images to be included.                                                                                             |
-| VIS_OPTION_NAME                   | Visualisation option for contrast enhancements. At the moment only 'TrueColour' is supported.                                                                           |
-| SCALE                             | The image scale in meters. Sentinel 2 images have a maximum resolution of 10 meters.                                                                                    |
-| BUCKET_NAME                       | The bucket name in Google Cloud Storage.                                                                                                                                |
-| BUCKET_PATH                       | The path in the bucket in Google Cloud Storage.                                                                                                                         |
+| Variable                          | Description                                                                                                                                                                                                  |
+|-----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| THREADS                           | Number of threads to run the composite creation in parallel.                                                                                                                                                 |
+| MAX_CLOUD_COVER                   | ImageCollection filter: the maximum percentage of cloud cover per image.                                                                                                                                     |
+| MIN_NUMBER_OF_IMAGES_IN_COMPOSITE | `create-composite.py` only: The minimum number of images included in the image collection for creating the composite. This number of images is used to calculate the base noise level.                       |
+| MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | `create-low-tide-composite.py` only: The maximum number of images included in the image collection for creating the composite. The more images are included, the more processing per image needs to be done. |
+| PERCENTILE                        | The percentile to reduce the collection to the composite image.                                                                                                                                              |
+| START_DATE                        | ImageCollection filter: The beginning of the period for images to be included.                                                                                                                               |
+| END_DATE                          | ImageCollection filter: The ending of the period for images to be included.                                                                                                                                  |
+| VIS_OPTION_NAME                   | Visualisation option for contrast enhancements. At the moment only 'TrueColour' is supported.                                                                                                                |
+| SCALE                             | The image scale in meters. Sentinel 2 images have a maximum resolution of 10 meters.                                                                                                                         |
+| BUCKET_NAME                       | The bucket name in Google Cloud Storage.                                                                                                                                                                     |
+| BUCKET_PATH                       | The path in the bucket in Google Cloud Storage.                                                                                                                                                              |
 
 ### `create-preview-images.py`
 

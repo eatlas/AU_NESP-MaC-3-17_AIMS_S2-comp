@@ -11,14 +11,19 @@ class NoisePredictor:
         """
         Filter out images from collection that add more noise to the final composite.
 
+        :param min_images_in_collection: The minimum number of images to use in the collection. This number of images
+                                                            is used to calculate the base noise level.
+        :param tile_id: The Sentinel 2 tile ID (used for logging)
+        :param orbit_number: The Sentinel 2 SENSING_ORBIT_NUMBER (used for logging)
         :param {ee.ImageCollection} composite_collection: The image collection where noise adding images need to be
                                                             removed.
         :return: {ee.ImageCollection} The collection containing no noise-adding images.
         """
 
+        # Add image noise index value as property to the all images
         composite_collection = composite_collection.map(self.calculate_image_noise)
 
-        # add a dictionary with relevant properties for easier access later
+        # Add a dictionary with relevant properties for easier access later
         def add_dictionary(image):
             properties = ["system:index", "CLOUDY_PIXEL_PERCENTAGE", "noise_index"]
             # Get the dictionary of properties with only wanted keys
@@ -28,13 +33,18 @@ class NoisePredictor:
 
         composite_collection = composite_collection.map(add_dictionary)
 
+        # Create a list of only the noise property values
         noise_properties_list = composite_collection.aggregate_array(
             "noise_properties"
         ).getInfo()
 
+        # Sort the list by noise_index
         noise_properties_list = sorted(
             noise_properties_list, key=lambda x: x["noise_index"]
         )
+
+        # Remove all entries with noise_index >= 15 as they don't provide any value
+        noise_properties_list = [item for item in noise_properties_list if item["noise_index"] < 15]
 
         # Calculate initial noise level for minimum number of images as a baseline
         filtered_list = noise_properties_list[0:min_images_in_collection]
@@ -43,6 +53,9 @@ class NoisePredictor:
             f"{tile_id} - {orbit_number} - Base composite noise level for {min_images_in_collection} "
             + f"images: {base_noise_level}")
 
+        # Iterate over remaining images (without images used in base noise level calculation) and test if adding images
+        # adds to the noise or reduces the noise. If it reduces the noise add it to the composite. If it increases the
+        # noise stop checking images and return list.
         for end_row in range(min_images_in_collection + 1, len(noise_properties_list)):
             next_filtered_list = noise_properties_list[0:end_row]
             composite_noise_level = self.calculate_noise_in_property_list(next_filtered_list)
@@ -59,6 +72,7 @@ class NoisePredictor:
 
         self.logger.info(
             f"{tile_id} - {orbit_number} - Using {len(filtered_list)} images for composite")
+        # Create array of image IDs from filtered list
         system_index_values = [d["system:index"] for d in filtered_list]
 
         # Construct an Earth Engine list from the Python list

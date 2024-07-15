@@ -98,7 +98,8 @@ class Sentinel2Processor:
         # Initialise the handlers
         self.sun_glint_handler = SunGlintHandler()
         self.exclude_tile_ids = [
-            '20160605T015625_20160605T065121_T51KWB'
+            '20160605T015625_20160605T065121_T51KWB',
+            '20160605T015625_20160605T065121_T51KXB'
         ]
         self.cloud_handler = CloudHandler()
 
@@ -140,6 +141,7 @@ class Sentinel2Processor:
             tile_id, max_cloud_cover, start_date, end_date
         )
 
+        # Initiate noise-predictor
         noise_predictor = NoisePredictor(self.logger)
 
         # Split collection by "SENSING_ORBIT_NUMBER". A tile is made up of different sections depending on the
@@ -152,7 +154,7 @@ class Sentinel2Processor:
         ).distinct().getInfo()
         self.logger.info(f"{tile_id} - Orbit numbers: {len(orbit_numbers)}")
 
-        # Create ImageCollections for each orbit number and filter for low tide images
+        # Create ImageCollections for each orbit number and filter for low noise images
         system_index_values = []
         for orbit_number in orbit_numbers:
             orbit_collection = composite_collection.filter(

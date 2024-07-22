@@ -38,7 +38,7 @@ class TidePredictor:
 
         # read tile centroids
         self.tile_water_centroids = np.genfromtxt(
-            DATA_PATH + "sentinel2-study-area-water-centroids.csv",
+            DATA_PATH + "sentinel2-water-centroids.csv",
             dtype=None,
             delimiter=",",
             names=True,

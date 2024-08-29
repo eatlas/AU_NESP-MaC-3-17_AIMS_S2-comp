@@ -1,4 +1,4 @@
-# Copyright 2023 Marc Hammerton - Australian Institute of Marine Science
+# Copyright 2024 Marc Hammerton - Australian Institute of Marine Science
 #
 # MIT License https://mit-license.org/
 # This script creates composites from Sentinel 2 images based on tile IDs
@@ -20,19 +20,16 @@ ee.Initialize()
 THREADS = 2
 
 MAX_CLOUD_COVER = 20
-MIN_NUMBER_OF_IMAGES_IN_COMPOSITE = 30
+MAX_NUMBER_OF_IMAGES_IN_COMPOSITE = 200
 PERCENTILE = 15
-VIS_OPTION_NAME = 'TrueColour'
+START_DATE = '2022-01-01'
+END_DATE = '2024-06-30'
+BUCKET_NAME = "aims-marb"
+BUCKET_PATH = "ndwi/"
 SCALE = 10
+VIS_OPTION_NAME = 'NDWI'
 CORRECT_SUN_GLINT = True
 
-# First set of images
-START_DATE = '2015-06-27'
-END_DATE = '2024-05-31'
-FILE_NAME_SUFFIX = "v2_2015-2024"
-
-BUCKET_NAME = "aims-marb"
-BUCKET_PATH = "composites_15th_percentile_v2_2015-2024/"
 #########################################################
 # End configuration
 #########################################################
@@ -50,16 +47,19 @@ def process_tile_id(tile_id, tile_index):
     :return: The tile index.
     """
     logging.info("%s starting to process %s", tile_index, tile_id)
-    composite = processor.get_composite(tile_id, MAX_CLOUD_COVER, MIN_NUMBER_OF_IMAGES_IN_COMPOSITE, START_DATE,
-                                        END_DATE)
-    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p15_" + VIS_OPTION_NAME + "_" + tile_id + "_" +
-                              FILE_NAME_SUFFIX, tile_id, VIS_OPTION_NAME, SCALE)
+    composite = processor.get_above_mean_sea_level_composite(tile_id, MAX_CLOUD_COVER,
+                                                             MAX_NUMBER_OF_IMAGES_IN_COMPOSITE,
+                                                             START_DATE, END_DATE, CORRECT_SUN_GLINT,
+                                                             percentile=PERCENTILE)
+    processor.export_to_cloud(composite, "AU_AIMS_MARB-S2-comp_p" + str(PERCENTILE) + "_" + VIS_OPTION_NAME +
+                              "_" + tile_id, tile_id, VIS_OPTION_NAME, SCALE, "Int8")
     logging.info("%s finished processing %s", tile_index, tile_id)
     return tile_index
 
 
 # Create argument parser
-parser = argparse.ArgumentParser(description='Create a composite image for Sentinel 2 tile IDs')
+parser = argparse.ArgumentParser(
+    description='Create a NDWI gray scale image from an above mean tide composite image for Sentinel 2 tile IDs')
 
 # Add arguments
 parser.add_argument('--data_file', type=str, help='Name of the data file containing the tile IDs. '
@@ -83,7 +83,6 @@ logging.basicConfig(format="%(asctime)s: %(message)s", level=logging.INFO, datef
 
 # read tile ID CSV in chunks
 with pd.read_csv(args.data_file, chunksize=THREADS) as reader:
-
     # process each chunk
     for tile_ids_chunk in reader:
         # create thread pool for chunk

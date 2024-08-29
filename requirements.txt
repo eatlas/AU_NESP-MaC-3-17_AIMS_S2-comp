@@ -4,3 +4,8 @@ pytmd~=2.1.1   # channel: conda-forge
 earthengine-api~=0.1.391  # channel: conda-forge
 pandas~=2.2.1
 gdal~=3.6.2   # channel: conda-forge
+
+scipy~=1.9.3
+rasterio~=1.3.9
+geopandas~=0.14.4
+shapely~=2.0.5

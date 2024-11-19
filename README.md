@@ -1,6 +1,6 @@
 # NESP MaC Project 3.17 - North Australia Sentinel 2 Satellite Composite Imagery
 
-Marc Hammerton - Australian Institute of Marine Science - 29 August 2024
+Marc Hammerton - Australian Institute of Marine Science - 19 Nov 2024
 
 This repository contains the code to create various datasets from satellite imagery for the northern Australian 
 seascape. The scripts are written in Python and use the Google Earth Engine library
@@ -10,7 +10,7 @@ seascape. The scripts are written in Python and use the Google Earth Engine libr
 
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
-- 2024-11-19 - Updated version of Australian coastline (V1-1) with manual editing of rivers. Inclusion of `split-land-shapefile.py` in this repo. (Git tag: "coastline_v1-1")
+- 2024-11-19 - Updated version of Australian coastline (V1-1) with manual editing of rivers and addition of Christmas Island, Cocos Island, Norfolk Island and Lord Howe Island. Included `split-land-shapefile.py` in this repo. (Git tag: "coastline_v1-1")
 - 2024-08-29 - Publish Australian coastline (v1) (Git tag: "coastline_v1")
 - 2024-07-22 - Publish version 2 composites using a noise prediction algorithm to only include low noise images in 
 composite (Git tag: "composites_v2")
@@ -20,13 +20,13 @@ composite (Git tag: "composites_v2")
 
 ## Datasets
 
-- ***Australian coastline - version 1 2024:***  
+- ***Australian coastline - version 1-1 2024:***  
   A coastline of Australia generated from NDWI calculations on above mean sea level satellite image composites (10 m
   resolution Sentinel 2 imagery from 2022 – 2024).  
   *Dataset ID:* AU_NESP-MaC-3-17_AIMS_Aus-Coastline-50k_2024
   *Metadata:* https://eatlas.org.au/data/uuid/c5438e91-20bf-4253-a006-9e9600981c5f  
   *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_Australian-Coastline  
-  *Git tag:* "coastline_v1"
+  *Git tag:* "coastline_v1-1"
 
 - ***15th percentile true colour - version 2 2024:***  
   A final version of clear-water composite images for the northern Australian seascape using the 15th
@@ -192,6 +192,24 @@ The script has variables at the top of the file to manage settings:
 | MAX_NUMBER_OF_IMAGES_IN_COMPOSITE | The maximum number of images in a image collection for creating the composite.                |
 
 
+
+
+## AU_AIMS_Coastline_v1
+
+In this dataset we created a coastline using a simplified approach based on https://doi.org/10.1016/j.rse.2021.112734 .
+
+Process:
+1. Create above mean sea level composites.
+2. Create gray scale images from NDWI calculations.
+3. Upscale images by factor 2
+4. Vectorise NDWI images with NDWI threshold 0.15 (147.05 in the rescaled image with values between 1 and 255). This step also includes 'filling holes' in the land polygons to remove salt flats etc.
+5. Merge and dissolve all vector layers in QGIS.
+6. Clean up false polygons created by sun glint.
+7. Perform smoothing (QGIS tool box, Iterations 1, Offset 0.25, Maximum node angle to smooth 180)
+8. Perform simplification (QGIS tool box, tolerance 0.00003).
+9. Split feature into singleparts (QGIS tool box, Mulitpart to Singleparts)
+10. Remove very small features (1 - 1.5 pixel sized features, e.g. single mangrove trees) by calculating the area of each feature (in m2) and removing features smaller than 200m2.
+
 ### `vectorise-geotiffs.py`
 
 This script generates polygons for landmasses detected in NDWI GeoTIFFs and saves them as shapefiles.
@@ -205,6 +223,8 @@ The script has variables at the top of the file to manage settings:
 | SCALE_FACTOR  | Factor by which the input NDWI image will be upscaled.      |
 
 ### `split-land-shapefile.py`
+
+_Added in version 1-1_
 
 This script takes the Australian Coastline shapefile creates derivative products from it. These include a split of the polygons to a 2 degree grid to improve performance and a simplification of the full dataset.
 

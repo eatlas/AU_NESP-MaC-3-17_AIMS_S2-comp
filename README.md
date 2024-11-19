@@ -10,6 +10,7 @@ seascape. The scripts are written in Python and use the Google Earth Engine libr
 
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
+2024-11-19 - Updated version of Australian coastline (V1-1) with manual editing of rivers. Inclusion of `split-land-shapefile.py` in this repo. (Git tag: "coastline_v1-1")
 2024-08-29 - Publish Australian coastline (v1) (Git tag: "coastline_v1")
 2024-07-22 - Publish version 2 composites using a noise prediction algorithm to only include low noise images in 
 composite (Git tag: "composites_v2")
@@ -22,6 +23,7 @@ composite (Git tag: "composites_v2")
 - ***Australian coastline - version 1 2024:***  
   A coastline of Australia generated from NDWI calculations on above mean sea level satellite image composites (10 m
   resolution Sentinel 2 imagery from 2022 – 2024).  
+  *Dataset ID:* AU_NESP-MaC-3-17_AIMS_Aus-Coastline-50k_2024
   *Metadata:* https://eatlas.org.au/data/uuid/c5438e91-20bf-4253-a006-9e9600981c5f  
   *Data download:* https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_Australian-Coastline  
   *Git tag:* "coastline_v1"
@@ -201,3 +203,23 @@ The script has variables at the top of the file to manage settings:
 | INPUT_FOLDER  | Path to the folder containing input GeoTIFF files.          |
 | OUTPUT_FOLDER | Path to the folder where the processed files will be saved. |
 | SCALE_FACTOR  | Factor by which the input NDWI image will be upscaled.      |
+
+### `split-land-shapefile.py`
+
+This script takes the Australian Coastline shapefile creates derivative products from it. These include a split of the polygons to a 2 degree grid to improve performance and a simplification of the full dataset.
+
+1. Download the data from: 
+https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_Australian-Coastline-50K-2024
+
+2. Save it into the `data/Aus-Coastline-50k_2024/' directory.
+
+This script expects the full coastline dataset (with any manual edits) to be available in:
+`data/Aus-Coastline-50k_2024/{VERSION}/Full/AU_NESP-MaC-3-17_AIMS_Aus-Coastline-50k_2024_V1-1.shp`
+
+This script will save back the modified derived variants to:
+`data/Aus-Coastline-50k_2024/{VERSION}/`
+
+```shell
+cd src
+python split-land-shapefile.py
+```

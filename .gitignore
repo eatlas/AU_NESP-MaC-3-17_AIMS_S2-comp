@@ -6,7 +6,8 @@
 *.tiff
 *.tif
 
-/data/
+/data/*
+!/data/README.md
 .history
 
 /src/helper

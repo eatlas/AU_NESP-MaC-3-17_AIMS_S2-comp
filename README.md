@@ -243,3 +243,13 @@ This script will save back the modified derived variants to:
 cd src
 python split-land-shapefile.py
 ```
+
+### Making new manual corrections to the Australian Coastline 50k 2024 dataset
+To make improvements to the coastline dataset:
+1. Clone this code repository to allow updates to the change log.
+2. Download the latest version of the dataset from the metadata record (https://doi.org/10.26274/qfy8-hj59) or NextCloud: https://nextcloud.eatlas.org.au/apps/sharealias/a/AU_NESP-MaC-3-17_AIMS_Australian-Coastline-50K-2024 into the `data/Aus-Coastline-50k_2024` directory.
+3. Create a directory for the new version, such as `V1-2/Full`. Copy over and rename (with the new version number) the coastline shapefile into the new folder. We want to ensure that the previous versions are unmodified.
+4. Perform corrections to the new version, typically using QGIS.
+5. Run the `src/split-land-shapefile.py` script to create the split and simplified versions of the dataset, ensuring that the version number in the script is updated to match the new version.
+6. Update the change log in this README.md, update the change log in the metadata record on eAtlas, push the new version to NextCloud. Commit the changes to this repository in GitHub.
+7. Copy the updates to the eAtlas enduring repository. Setup the new version in the eAtlas mapping system.

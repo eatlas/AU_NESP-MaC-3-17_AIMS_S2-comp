@@ -10,13 +10,13 @@ seascape. The scripts are written in Python and use the Google Earth Engine libr
 
 This code will be progressively modified to improve the quality of the dataset and to provide different types of
 datasets. These additions will be noted in this change log.  
-2024-11-19 - Updated version of Australian coastline (V1-1) with manual editing of rivers. Inclusion of `split-land-shapefile.py` in this repo. (Git tag: "coastline_v1-1")
-2024-08-29 - Publish Australian coastline (v1) (Git tag: "coastline_v1")
-2024-07-22 - Publish version 2 composites using a noise prediction algorithm to only include low noise images in 
+- 2024-11-19 - Updated version of Australian coastline (V1-1) with manual editing of rivers. Inclusion of `split-land-shapefile.py` in this repo. (Git tag: "coastline_v1-1")
+- 2024-08-29 - Publish Australian coastline (v1) (Git tag: "coastline_v1")
+- 2024-07-22 - Publish version 2 composites using a noise prediction algorithm to only include low noise images in 
 composite (Git tag: "composites_v2")
-2024-05-16 - Add capability to create low-tide composites and near infrared false colour style (Git tag: 
+- 2024-05-16 - Add capability to create low-tide composites and near infrared false colour style (Git tag: 
 "low_tide_composites_v1")  
-2024-03-07 - Initial release draft composites using 15th percentile (Git tag: "composites_v1")
+- 2024-03-07 - Initial release draft composites using 15th percentile (Git tag: "composites_v1")
 
 ## Datasets
 
